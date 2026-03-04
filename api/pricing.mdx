@@ -91,12 +91,12 @@ The pricing calculation follows these rules:
 ### Basic Request
 
 ```bash
-curl -X POST https://api.paparcapp.com/api/pricing/dynamic \
+curl -X POST https://paparcapp-azby.onrender.com/api/pricing/dynamic \
   -H "Content-Type: application/json" \
   -d '{
     "entry_date": "2026-03-10T10:00:00.000Z",
     "exit_date": "2026-03-15T10:00:00.000Z",
-    "vehicle_type": "COCHE",
+    "vehicle_type": "TURISMO",
     "id_main_service": 1
   }'
 ```
@@ -104,12 +104,12 @@ curl -X POST https://api.paparcapp.com/api/pricing/dynamic \
 ### Request with Additional Services
 
 ```bash
-curl -X POST https://api.paparcapp.com/api/pricing/dynamic \
+curl -X POST https://paparcapp-azby.onrender.com/api/pricing/dynamic \
   -H "Content-Type: application/json" \
   -d '{
     "entry_date": "2026-03-10T10:00:00.000Z",
     "exit_date": "2026-03-15T10:00:00.000Z",
-    "vehicle_type": "COCHE",
+    "vehicle_type": "TURISMO",
     "id_main_service": 1,
     "additional_services": [2, 4]
   }'

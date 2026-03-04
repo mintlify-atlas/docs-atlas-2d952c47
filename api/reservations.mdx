@@ -150,7 +150,7 @@ If any step fails, the entire transaction is rolled back and no data is saved.
 ### Complete Request
 
 ```bash
-curl -X POST https://api.paparcapp.com/api/reservations/public-new \
+curl -X POST https://paparcapp-azby.onrender.com/api/reservations/public-new \
   -H "Content-Type: application/json" \
   -d '{
     "full_name": "Juan Pérez",
@@ -159,7 +159,7 @@ curl -X POST https://api.paparcapp.com/api/reservations/public-new \
     "license_plate": "1234ABC",
     "brand": "Toyota",
     "model": "Corolla",
-    "vehicle_type": "COCHE",
+    "vehicle_type": "TURISMO",
     "entry_date": "2026-03-10T10:00:00.000Z",
     "exit_date": "2026-03-15T10:00:00.000Z",
     "id_main_service": 1,
@@ -170,13 +170,13 @@ curl -X POST https://api.paparcapp.com/api/reservations/public-new \
 ### Minimal Request
 
 ```bash
-curl -X POST https://api.paparcapp.com/api/reservations/public-new \
+curl -X POST https://paparcapp-azby.onrender.com/api/reservations/public-new \
   -H "Content-Type: application/json" \
   -d '{
     "full_name": "Juan Pérez",
     "phone": "+34612345678",
     "license_plate": "1234ABC",
-    "vehicle_type": "COCHE",
+    "vehicle_type": "TURISMO",
     "entry_date": "2026-03-10T10:00:00.000Z",
     "exit_date": "2026-03-15T10:00:00.000Z",
     "id_main_service": 1
