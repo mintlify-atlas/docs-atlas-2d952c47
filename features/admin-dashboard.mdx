@@ -1,0 +1,774 @@
+---
+title: 'Admin Dashboard'
+description: 'Real-time parking operations center for tracking entries, exits, and managing reservations'
+icon: 'gauge-high'
+---
+
+## Overview
+
+The admin dashboard is the **operational hub** for parking staff to:
+- View scheduled entries and exits for any date
+- Track vehicles currently in the facility
+- Manage reservations (check-in, check-out, edit details)
+- Upload photo evidence of vehicle condition
+- Create walk-in reservations on the spot
+
+<Info>
+  **Route**: `/admin/dashboard` (requires ADMIN role)  
+  **Controller**: `controllers/adminController.js:getDashboard()` (line 14-17)  
+  **View**: `views/dashboard.ejs`  
+  **Client Logic**: `public/javascripts/dashboard.js`
+</Info>
+
+---
+
+## Access Control
+
+### Dual Login System
+
+PaparcApp uses a **single database** with role-based access:
+
+```javascript
+// authController.js:80-92
+if (loginType === 'worker') {
+    if (user.type !== 'ADMIN') {
+        return res.render('login', {
+            error: 'Access denied. No employee permissions.'
+        });
+    }
+}
+
+// authController.js:104-111
+req.session.save(() => {
+    if (user.type === 'ADMIN') {
+        return res.redirect('/admin/dashboard');
+    } else {
+        return res.redirect('/users/profile');
+    }
+});
+```
+
+<Note>
+  The login form has a **hidden field** (`loginType`) that determines which portal the user is accessing. Only users with `type = 'ADMIN'` in the `customer` table can access `/admin/*` routes.
+</Note>
+
+### Middleware Protection
+
+```javascript
+// middleware/auth.js
+function requireAdmin(req, res, next) {
+    if (!req.session.user || req.session.user.role !== 'ADMIN') {
+        return res.redirect('/users/login');
+    }
+    next();
+}
+```
+
+---
+
+## Dashboard Layout
+
+<Steps>
+  <Step title="Welcome Header">
+    - Greeting: "Hello, [Admin Name]!"
+    - Current selected date badge
+  </Step>
+  
+  <Step title="Statistics Cards">
+    3 metric cards:
+    - **Scheduled Entries**: Vehicles arriving today
+    - **Scheduled Exits**: Vehicles leaving today
+    - **Total Scheduled Bookings**: Sum of entries + exits
+  </Step>
+  
+  <Step title="Entries Table">
+    Green-themed card showing vehicles checking in
+  </Step>
+  
+  <Step title="Exits Table">
+    Red-themed card showing vehicles checking out
+  </Step>
+  
+  <Step title="Calendar Widget">
+    jQuery UI datepicker to select any date
+  </Step>
+</Steps>
+
+---
+
+## Calendar-Driven Data Loading
+
+### Initialization
+
+On page load, dashboard fetches **today's data**:
+
+```javascript
+// dashboard.js:8-21
+$(document).ready(function() {
+    initCalendar();
+    
+    const localDate = new Date();
+    localDate.setMinutes(localDate.getMinutes() - localDate.getTimezoneOffset());
+    const today = localDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    updateHeaderDate(today);
+    loadDashboardData(today);
+});
+```
+
+### Date Selection
+
+When user clicks a calendar date:
+
+```javascript
+// dashboard.js:38-44
+onSelect: function(dateText) {
+    console.log(`Date changed to: ${dateText}`);
+    
+    $('#date-picker').val(dateText);
+    updateHeaderDate(dateText);
+    loadDashboardData(dateText); // Fetch new data
+}
+```
+
+### API Call
+
+**GET** `/api/reservations?date=2024-03-15`
+
+**Response Structure**:
+```json
+{
+  "stats": {
+    "total_entries": 8,
+    "total_exits": 5
+  },
+  "entries": [
+    {
+      "id_reservation": 42,
+      "entry_date": "2024-03-15T09:00:00Z",
+      "license_plate": "1234ABC",
+      "brand": "Toyota",
+      "color": "Red",
+      "customer_name": "John Doe",
+      "phone": "+34600123456",
+      "service_name": "Premium Parking",
+      "status": "PENDIENTE"
+    }
+  ],
+  "exits": [...]
+}
+```
+
+**Backend Query** (reservation-dao.js:20-49):
+```sql
+SELECT r.*, v.license_plate, v.brand, v.color,
+       c.full_name AS customer_name, c.phone,
+       s.name AS service_name
+FROM reservation r
+JOIN vehicle v ON r.id_vehicle = v.id_vehicle
+JOIN customer c ON r.id_customer = c.id_customer
+JOIN main_service s ON r.id_main_service = s.id_main_service
+WHERE r.entry_date::date = $1::date
+   OR r.exit_date::date = $1::date
+ORDER BY r.entry_date ASC;
+```
+
+---
+
+## Entries & Exits Tables
+
+### Table Rendering
+
+Both tables use **template cloning** for performance:
+
+```javascript
+// dashboard.js:115-165
+function renderTable(table, data, type) {
+    const tbody = document.querySelector(`#${table}`);
+    const template = document.querySelector('#row-template');
+    
+    tbody.innerHTML = ''; // Clear existing rows
+    
+    if (!data || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8">No scheduled movements</td></tr>';
+        return;
+    }
+    
+    data.forEach(reservation => {
+        const useTemplate = template.content.cloneNode(true);
+        const row = useTemplate.querySelector('tr');
+        const btn = useTemplate.querySelector('.column-btn');
+        
+        // Status-based styling
+        switch (reservation.status) {
+            case 'CANCELADA':
+                row.classList.add('row-status-cancelled');
+                btn.textContent = 'Cancelled';
+                break;
+            case 'FINALIZADA':
+                row.classList.add('row-status-finished');
+                btn.textContent = 'Finished';
+                break;
+        }
+        
+        const rawTime = type === 'entry' ? reservation.entry_date : reservation.exit_date;
+        const time = new Date(rawTime).toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+        
+        // Populate cells
+        useTemplate.querySelector('.column-time').textContent = time;
+        useTemplate.querySelector('.column-license').textContent = reservation.license_plate;
+        useTemplate.querySelector('.column-brand').textContent = reservation.brand;
+        useTemplate.querySelector('.column-color').textContent = reservation.color;
+        useTemplate.querySelector('.column-customer').textContent = reservation.customer_name;
+        useTemplate.querySelector('.column-phone').textContent = reservation.phone;
+        useTemplate.querySelector('.column-service').textContent = reservation.service_name;
+        
+        btn.href = `/admin/reservations/details/${reservation.id_reservation}`;
+        
+        tbody.appendChild(useTemplate);
+    });
+}
+```
+
+### Status Indicators
+
+<CardGroup cols={3}>
+  <Card title="PENDIENTE" icon="clock">
+    **Default**: Blue "Manage" button  
+    Awaiting vehicle arrival
+  </Card>
+  
+  <Card title="CANCELADA" icon="ban">
+    **Gray row**, "Cancelled" button  
+    Reservation was cancelled (no-show or customer request)
+  </Card>
+  
+  <Card title="FINALIZADA" icon="circle-check">
+    **Green accent**, "Finished" button  
+    Vehicle has checked out and paid
+  </Card>
+</CardGroup>
+
+---
+
+## Reservation Management
+
+Clicking "Manage" button navigates to **detailed view**:
+
+**Route**: `/admin/reservations/details/:id`  
+**Controller**: `adminController.js:getReservationInfo()` (line 32-61)
+
+### Data Loaded
+
+```javascript
+const [vehicleTypes, mainServices, additionalServices] = await Promise.all([
+    serviceCatalogDAO.getVehicleTypes(),
+    serviceCatalogDAO.getMainServices(),
+    serviceCatalogDAO.getAllAdditionalServices()
+]);
+
+const reservation = await reservationDAO.getInfoReservationByIdReservation(id);
+```
+
+This fetches:
+- Full reservation details
+- Customer info (name, phone, email)
+- Vehicle info (license plate, brand, model, color, type)
+- Associated photos (with count)
+- Notification history
+- Selected additional services
+
+### Editable Fields
+
+<AccordionGroup>
+  <Accordion title="Customer Information">
+    - Full Name
+    - Phone
+    - Email
+    
+    Updates reflect in `customer` table.
+  </Accordion>
+  
+  <Accordion title="Vehicle Details">
+    - Brand
+    - Model
+    - Color
+    - Vehicle Type (dropdown)
+    
+    **License Plate**: Read-only (primary identifier)
+  </Accordion>
+  
+  <Accordion title="Stay Dates & Services">
+    - Entry Date (datetime-local)
+    - Exit Date (datetime-local)
+    - Main Service (dropdown)
+    - Additional Services (checkboxes)
+    - **Parking Spot**: Text input (e.g., "A-15")
+  </Accordion>
+</AccordionGroup>
+
+### Real-time Price Recalculation
+
+As admin edits dates/services, price updates live:
+
+```javascript
+// dynamic-pricing.js
+document.querySelectorAll('.calc_extra_service, #calc_entry_date, ...').forEach(el => {
+    el.addEventListener('change', async () => {
+        const payload = {
+            entry_date: entryInput.value,
+            exit_date: exitInput.value,
+            vehicle_type: vehicleTypeSelect.value,
+            id_main_service: parseInt(mainServiceSelect.value),
+            additional_services: [...]
+        };
+        
+        const response = await fetch('/api/pricing/dynamic', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+        
+        const data = await response.json();
+        document.querySelector('#dynamic_total_price').textContent = data.total_price;
+    });
+});
+```
+
+<Warning>
+  **Server Recalculation**: When form is submitted, server **always recalculates** price to prevent tampering (adminController.js:124-131).
+</Warning>
+
+---
+
+## Photo Evidence System
+
+### Purpose
+
+Protect both customer and business by documenting vehicle condition on arrival.
+
+### Minimum Requirement
+
+<Note>
+  **5 photos minimum** required to start a reservation (transition PENDIENTE → EN CURSO).
+</Note>
+
+### Upload Interface
+
+**Only visible for PENDIENTE reservations**:
+
+```html
+<!-- reservation-details.ejs:249-262 -->
+<div class="upload-alert">
+  <span><i class="bi bi-exclamation-triangle"></i> Min. 5 photos</span>
+  <strong><%= reservation.photos.length %>/5 uploaded</strong>
+</div>
+
+<div class="upload-form">
+  <input type="url" id="photo_url_input" placeholder="Photo URL..." />
+  <input type="text" id="photo_desc_input" placeholder="Description (optional)" />
+  <button type="button" id="btn_upload_photo" data-id="<%= reservation.id_reservation %>">
+    <i class="bi bi-upload"></i>
+  </button>
+</div>
+```
+
+### API Endpoint
+
+**POST** `/admin/reservations/:id/photos`  
+**Controller**: `adminController.js:486-526`
+
+```javascript
+const { file_path, description } = req.body;
+
+// Validate URL
+if (!file_path || file_path.trim() === '') {
+    return res.status(400).json({ message: 'Photo URL is required' });
+}
+
+// Check reservation exists and is not finished/cancelled
+const reservation = await reservationDAO.getInfoReservationByIdReservation(id_reservation);
+if (['FINALIZADA', 'CANCELADA'].includes(reservation.status)) {
+    return res.status(400).json({
+        message: `Cannot add photos to ${reservation.status} reservation`
+    });
+}
+
+await reservationDAO.addPhotoEvidence(id_reservation, file_path, description);
+```
+
+**Database Storage** (reservation-dao.js:539-566):
+```sql
+INSERT INTO photo_evidence (id_reservation, file_path, description)
+VALUES ($1, $2, $3)
+RETURNING id_photo;
+```
+
+### Photo Display
+
+Each photo shows:
+- **Link** to image (opens in new tab)
+- **Description** or "Photo N"
+- **Timestamp** (e.g., "15/3/2024")
+
+---
+
+## State Transition Actions
+
+Depending on reservation status, different action buttons appear:
+
+### PENDIENTE → EN CURSO (Check-in)
+
+**Button**: "Receive Vehicle" (green)  
+**Route**: `PATCH /admin/reservations/:id/start`  
+**Controller**: `adminController.js:396-430`
+
+**Pre-flight Checks**:
+```javascript
+if (reservationInfo.status !== 'PENDIENTE') {
+    return res.status(400).json({
+        message: 'Only PENDIENTE reservations can be started'
+    });
+}
+
+if (!reservationInfo.photos || reservationInfo.photos.length < 5) {
+    return res.status(400).json({
+        message: 'At least 5 photos required to start reservation'
+    });
+}
+
+if (!reservationInfo.cod_parking_spot) {
+    return res.status(400).json({
+        message: 'Parking spot must be assigned before starting'
+    });
+}
+```
+
+**Database Update** (reservation-dao.js:469-493):
+```sql
+UPDATE reservation
+SET status = 'EN CURSO'
+WHERE id_reservation = $1
+RETURNING id_reservation;
+```
+
+### EN CURSO → FINALIZADA (Check-out)
+
+**Button**: "Finalize and Check Out" (red)  
+**Route**: `PATCH /admin/reservations/:id/finalize`  
+**Controller**: `adminController.js:440-475`
+
+**Requires Payment Method**:
+```javascript
+const { paymentMethod } = req.body;
+
+const validPaymentMethods = ['EFECTIVO', 'TARJETA'];
+if (!validPaymentMethods.includes(paymentMethod)) {
+    return res.status(400).json({
+        message: 'Invalid payment method. Accepted: EFECTIVO, TARJETA'
+    });
+}
+```
+
+**Database Update** (reservation-dao.js:502-528):
+```sql
+UPDATE reservation
+SET status = 'FINALIZADA',
+    is_paid = true,
+    payment_method = $2
+WHERE id_reservation = $1;
+```
+
+**Frontend Flow**:
+1. Admin clicks "Finalize" button
+2. SweetAlert2 modal asks for payment method:
+   - Cash
+   - Card
+3. Admin confirms
+4. PATCH request sent
+5. Page refreshes to show FINALIZADA status
+
+### Cancellation
+
+**Button**: "Cancel Booking" (red, only for PENDIENTE)  
+**Route**: `PATCH /admin/reservations/:id/cancel`  
+**Controller**: `adminController.js:350-386`
+
+**Validation**:
+```javascript
+const allowStatus = ['PENDIENTE'];
+if (!allowStatus.includes(currentReservation.status)) {
+    return res.status(400).json({
+        message: `Cannot cancel ${currentReservation.status} reservation`
+    });
+}
+```
+
+**Database Update** (reservation-dao.js:438-459):
+```sql
+UPDATE reservation
+SET status = 'CANCELADA',
+    cod_parking_spot = NULL  -- Free up parking spot
+WHERE id_reservation = $1;
+```
+
+---
+
+## Walk-in Reservations
+
+For customers arriving without prior booking:
+
+**Route**: `/admin/reservations/new` (GET form, POST submission)  
+**Controller**: `adminController.js:204-339`
+
+### Form Fields
+
+<CardGroup cols={2}>
+  <Card title="Customer" icon="user">
+    - Phone (required)
+    - Full Name
+    - Email (optional)
+  </Card>
+  
+  <Card title="Vehicle" icon="car">
+    - License Plate (required)
+    - Brand, Model, Color
+    - Vehicle Type
+  </Card>
+  
+  <Card title="Booking" icon="calendar">
+    - Entry Date (default: now)
+    - Exit Date (optional)
+    - Main Service
+    - Additional Services
+  </Card>
+  
+  <Card title="Parking Spot" icon="location-dot">
+    Optional at creation  
+    Can be assigned later
+  </Card>
+</CardGroup>
+
+### Backend Logic
+
+**POST** `/admin/reservations/new`  
+**Controller**: `adminController.js:239-339`
+
+<Steps>
+  <Step title="Validate Required Fields">
+    ```javascript
+    if (!phone || phone.trim() === '') {
+        return res.status(400).json({ message: 'Phone is required' });
+    }
+    if (!license_plate || license_plate.trim() === '') {
+        return res.status(400).json({ message: 'License plate is required' });
+    }
+    ```
+  </Step>
+  
+  <Step title="Check Vehicle Type Consistency">
+    ```javascript
+    const existingVehicle = await vehicleDAO.getVehicleByLicensePlate(license_plate);
+    if (existingVehicle && existingVehicle.type !== vehicle_type) {
+        return res.status(400).json({
+            message: `Plate ${license_plate} registered as ${existingVehicle.type}`
+        });
+    }
+    ```
+  </Step>
+  
+  <Step title="Calculate Price">
+    ```javascript
+    const totalPrice = pricingService.calculateTotalPrice(
+        entry_date,
+        exit_date,
+        vehicle_type,
+        parseInt(id_main_service),
+        arrayAdditionalServices
+    );
+    ```
+  </Step>
+  
+  <Step title="Create via Transaction">
+    ```javascript
+    const newReservationId = await reservationDAO.createReservationTransaction(
+        customerData,
+        vehicleData,
+        reservationData
+    );
+    ```
+    
+    Same atomic process as public booking (see public-booking.mdx).
+  </Step>
+</Steps>
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Reservation saved successfully",
+  "data": {
+    "id_reservation": 123,
+    "customer_name": "John Doe",
+    "license_plate": "1234ABC",
+    "entry_date": "15/3/2024, 14:30:00",
+    "total_price": 45.00
+  }
+}
+```
+
+Frontend shows SweetAlert2 success modal with booking ID.
+
+---
+
+## Parking Spot Management
+
+### Assignment
+
+**Parking Spot Code** field is a simple text input:
+```html
+<input type="text" id="cod_parking_spot" name="cod_parking_spot" 
+       value="<%= reservation.cod_parking_spot || '' %>" 
+       placeholder="e.g. A-15, Basement 2..." />
+```
+
+**Validation** (adminController.js:98-103):
+```javascript
+const requireStatus = ['EN CURSO', 'FINALIZADA'];
+
+if (requireStatus.includes(currentReservation.status) && !normalizedCodParkingSpot) {
+    return res.redirect(`/admin/reservations/details/${id_reservation}?error=${encodeURIComponent(
+        'Parking spot required for EN CURSO/FINALIZADA reservations'
+    )}`);
+}
+```
+
+### Normalization
+
+```javascript
+const normalizedCodParkingSpot = 
+    cod_parking_spot && cod_parking_spot.trim() !== '' 
+    ? cod_parking_spot.trim().toUpperCase()
+    : null;
+```
+
+Examples:
+- `"a-15"` → `"A-15"`
+- `" basement 2 "` → `"BASEMENT 2"`
+- `""` → `NULL` (freed spot)
+
+<Note>
+  No predefined spot list—admins can type any code. Future versions may add dropdown with available spots.
+</Note>
+
+---
+
+## History & Reporting
+
+**Route**: `/admin/history`  
+**Controller**: `adminController.js:165-195`
+
+### Features
+
+<CardGroup cols={2}>
+  <Card title="Filters" icon="filter">
+    - **Status**: PENDIENTE, EN CURSO, FINALIZADA, CANCELADA
+    - **Search**: Customer name or license plate
+    - **Date Range**: From/To dates
+  </Card>
+  
+  <Card title="Pagination" icon="list-ol">
+    - 15 reservations per page
+    - Page number in URL
+    - Total count displayed
+  </Card>
+</CardGroup>
+
+### Query Example
+
+```javascript
+const filters = {
+    status: req.query.status || '',
+    search: req.query.search || '',
+    dateFrom: req.query.dateFrom || '',
+    dateTo: req.query.dateTo || ''
+};
+
+const page = parseInt(req.query.page) || 1;
+const limit = 15;
+const offset = (page - 1) * limit;
+
+const { reservations, totalCount } = await reservationDAO.getReservationsHistory(
+    filters, 
+    limit, 
+    offset
+);
+```
+
+**Backend Query** (reservation-dao.js:363-429) builds dynamic SQL with parameterized WHERE clauses.
+
+---
+
+## Navigation Structure
+
+Admin navigation bar (views/partials/nav_dashboard.ejs):
+
+```html
+<nav>
+  <a href="/admin/dashboard" class="<%= activeNav === 'dashboard' ? 'active' : '' %>">
+    <i class="bi bi-house-door"></i> Dashboard
+  </a>
+  
+  <a href="/admin/parking">
+    <i class="bi bi-p-square"></i> Real-time Parking
+  </a>
+  
+  <a href="/admin/reservations/new">
+    <i class="bi bi-plus-circle"></i> New Booking
+  </a>
+  
+  <a href="/admin/history">
+    <i class="bi bi-clock-history"></i> History
+  </a>
+  
+  <a href="/users/logout">
+    <i class="bi bi-box-arrow-right"></i> Logout
+  </a>
+</nav>
+```
+
+---
+
+## Code References
+
+| Component | File | Key Functions |
+|-----------|------|---------------|
+| **Dashboard Render** | `controllers/adminController.js` | `getDashboard()` (14-17) |
+| **Reservation Details** | `controllers/adminController.js` | `getReservationInfo()` (32-61) |
+| **Update Reservation** | `controllers/adminController.js` | `updateReservation()` (69-159) |
+| **Start Reservation** | `controllers/adminController.js` | `startReservation()` (396-430) |
+| **Finalize Reservation** | `controllers/adminController.js` | `finalizeReservation()` (440-475) |
+| **Cancel Reservation** | `controllers/adminController.js` | `cancelReservation()` (350-386) |
+| **Add Photo** | `controllers/adminController.js` | `addPhoto()` (486-526) |
+| **New Reservation Form** | `controllers/adminController.js` | `getNewReservationForm()` (204-229) |
+| **Create Reservation** | `controllers/adminController.js` | `createNewReservation()` (239-339) |
+| **History** | `controllers/adminController.js` | `getHistory()` (165-195) |
+| **Client Logic** | `public/javascripts/dashboard.js` | Calendar, table rendering |
+| **View Template** | `views/dashboard.ejs` | Main dashboard UI |
+| **Details Template** | `views/reservation-details.ejs` | Reservation management UI |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Reservation Lifecycle" icon="arrows-spin" href="/features/reservation-lifecycle">
+    Understand state machine and transitions
+  </Card>
+  
+  <Card title="Public Booking" icon="calendar-check" href="/features/public-booking">
+    How customers create reservations
+  </Card>
+</CardGroup>

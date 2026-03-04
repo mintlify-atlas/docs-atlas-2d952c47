@@ -1,0 +1,534 @@
+---
+title: 'User Profile & Garage'
+description: 'Customer dashboard for managing reservations, vehicles, and account settings'
+icon: 'user-circle'
+---
+
+## Overview
+
+The user profile is a **customer-facing dashboard** where registered users can:
+- View active and historical reservations
+- Manage their "virtual garage" (saved vehicles)
+- Edit personal information and password
+- Cancel or modify pending reservations
+
+<Info>
+  **Route**: `/users/profile` (requires authentication)  
+  **Controller**: `controllers/authController.js:renderProfile()` (line 248-278)  
+  **View**: `views/profile.ejs`  
+  **Client Script**: `public/javascripts/profile.js`
+</Info>
+
+---
+
+## Page Layout
+
+The profile page is divided into two main panels:
+
+<CardGroup cols={2}>
+  <Card title="Left Panel" icon="user">
+    **Account Information**
+    - Name, email, phone display
+    - "Edit Data" button
+    - Current active reservations (PENDIENTE, EN CURSO)
+  </Card>
+  
+  <Card title="Right Panel" icon="clock-rotate-left">
+    **Booking History**
+    - Past reservations (FINALIZADA, CANCELADA)
+    - Click to view details
+    - Filtered list with scrolling
+  </Card>
+</CardGroup>
+
+---
+
+## Data Loading
+
+When the profile loads, the server fetches all necessary data **in parallel** for performance:
+
+```javascript
+// authController.js:252-258
+const [vehicles, reservations, mainServices, additionalServices] = await Promise.all([
+    customerDAO.getVehiclesByCustomerId(userId),
+    reservationDAO.getReservationsByCustomerId(userId),
+    serviceCatalogDAO.getMainServices(true),
+    serviceCatalogDAO.getAllAdditionalServices(true)
+]);
+```
+
+### Reservation Filtering
+
+```javascript
+// authController.js:261-262
+const activeReservations = reservations.filter(r => 
+    r.status === 'PENDIENTE' || r.status === 'EN CURSO'
+);
+const historyReservations = reservations.filter(r => 
+    r.status === 'FINALIZADA' || r.status === 'CANCELADA'
+);
+```
+
+---
+
+## Active Reservations
+
+### Display Cards
+
+Each active reservation shows:
+
+<Steps>
+  <Step title="Reservation ID">
+    Ticket icon + `#42` format
+  </Step>
+  
+  <Step title="Entry Date">
+    Calendar icon + formatted date (e.g., "15/3/2024")
+  </Step>
+  
+  <Step title="Price">
+    Large bold text: `125.50 €`
+  </Step>
+  
+  <Step title="Status Badge">
+    Color-coded badge:
+    - **PENDIENTE** (yellow): Awaiting check-in
+    - **EN CURSO** (blue): Vehicle currently parked
+  </Step>
+</Steps>
+
+### Click Interaction
+
+Clicking a reservation card opens a **modal** with full details:
+
+```javascript
+// profile.ejs:44-70
+<div class="historial-item reserva-clickable" 
+     data-id="<%= resActual.id_reservation %>"
+     data-status="<%= resActual.status %>"
+     data-entry="<%= new Date(resActual.entry_date).toLocaleString('es-ES') %>"
+     data-exit="<%= resActual.exit_date ? ... : 'No definida' %>"
+     data-service="<%= resActual.main_service_name %>"
+     data-vehicle="<%= resActual.license_plate %> (<%= resActual.brand %>)"
+     data-price="<%= parseFloat(resActual.total_price).toFixed(2) %>">
+```
+
+Data attributes populate the modal without additional API calls.
+
+---
+
+## Reservation Details Modal
+
+When a reservation is clicked, a modal displays:
+
+<Accordion title="Information Shown">
+  - **Reservation ID**: `#42`
+  - **Entry Date**: `15/3/2024, 9:00:00`
+  - **Exit Date**: `20/3/2024, 18:00:00`
+  - **Service**: "Premium Parking"
+  - **Vehicle**: `1234ABC (Toyota Corolla)`
+  - **Total Price**: `125.50 €`
+  - **Status Badge**: Color-coded based on state
+</Accordion>
+
+### Action Buttons
+
+<CardGroup cols={2}>
+  <Card title="Cancel Booking" icon="circle-xmark">
+    **Only for PENDIENTE reservations**
+    
+    **DELETE** `/users/profile/reservation/:id/cancel`
+    
+    Validation (authController.js:366-368):
+    ```javascript
+    if (reserva.status !== 'PENDIENTE') {
+        return res.status(400).json({
+            message: 'Only PENDIENTE reservations can be cancelled'
+        });
+    }
+    ```
+    
+    Sets status to `CANCELADA` and frees parking spot.
+  </Card>
+  
+  <Card title="Edit Booking" icon="pen-to-square">
+    **For PENDIENTE and EN CURSO**
+    
+    Opens another modal with editable fields:
+    - Entry date (locked if EN CURSO)
+    - Exit date
+    - Main service selector
+    - Additional services checkboxes
+    
+    **PUT** `/users/profile/reservation/:id/edit`
+    
+    Server recalculates price to prevent tampering.
+  </Card>
+</CardGroup>
+
+<Warning>
+  **Entry Date Lock**: If reservation is EN CURSO (vehicle already checked in), entry date cannot be changed—only the exit date and services can be modified (authController.js:401).
+</Warning>
+
+---
+
+## Edit Reservation Flow
+
+### Frontend Modal
+
+```html
+<!-- profile.ejs:226-282 -->
+<div class="modal-overlay" id="editReservaModal">
+  <form id="form-edit-reserva">
+    <input type="hidden" id="edit-res-id" name="id_reservation" />
+    
+    <div class="form-row">
+      <input type="datetime-local" id="edit-res-entrada" name="entry_date" />
+      <input type="datetime-local" id="edit-res-exit" name="exit_date" />
+    </div>
+    
+    <select id="edit-res-service" name="id_main_service">
+      <!-- Main services -->
+    </select>
+    
+    <div class="extras-grid">
+      <!-- Additional services checkboxes -->
+    </div>
+    
+    <button type="submit">Request Update</button>
+  </form>
+</div>
+```
+
+### Backend Update Logic
+
+**Route**: `PUT /users/profile/reservation/:id/edit`  
+**Controller**: `authController.js:382-436`
+
+<Steps>
+  <Step title="Validate Ownership">
+    ```javascript
+    const reserva = await reservationDAO.getInfoReservationByIdReservation(reservationId);
+    if (!reserva || reserva.id_customer !== userId) {
+        return res.status(403).json({ message: 'Not your reservation' });
+    }
+    ```
+  </Step>
+  
+  <Step title="Lock Entry Date if EN CURSO">
+    ```javascript
+    const finalEntryDate = (reserva.status === 'EN CURSO') 
+        ? reserva.entry_date  // Use existing date
+        : new Date(entry_date); // Allow change
+    ```
+  </Step>
+  
+  <Step title="Recalculate Price (Server-side)">
+    ```javascript
+    const newTotalPrice = pricingService.calculateTotalPrice(
+        finalEntryDate,
+        finalExitDate,
+        reserva.type,
+        parseInt(id_main_service),
+        parsedExtras
+    );
+    ```
+    <Note>
+      Never trust client-submitted prices! Always recalculate on server.
+    </Note>
+  </Step>
+  
+  <Step title="Update via Transaction">
+    ```javascript
+    await reservationDAO.updateReservationTransaction(reservationId, {
+        entry_date: finalEntryDate,
+        exit_date: finalExitDate,
+        id_main_service: parseInt(id_main_service),
+        total_price: newTotalPrice,
+        additional_services: parsedExtras,
+        // Keep vehicle/spot unchanged
+        brand: reserva.brand,
+        model: reserva.model,
+        color: reserva.color,
+        vehicle_type: reserva.type,
+        cod_parking_spot: reserva.cod_parking_spot
+    });
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Account Settings
+
+Users can edit two categories of information via **tabbed modal**:
+
+### Personal Data Tab
+
+**Fields**:
+- Full Name
+- Email
+- Phone Number
+
+**Endpoint**: `PUT /users/profile/update`  
+**Controller**: `authController.js:281-305`
+
+```javascript
+const { nombre, email, telefono } = req.body;
+
+await customerDAO.updateCustomerData(userId, nombre, email, telefono);
+
+// Update session to reflect changes immediately
+req.session.user.nombre = nombre;
+req.session.user.email = email;
+req.session.user.numero = telefono;
+
+req.session.save(() => {
+    res.json({ success: true, message: 'Data updated successfully' });
+});
+```
+
+<Info>
+  Session is updated so the navigation bar immediately reflects the new name without re-login.
+</Info>
+
+### Password Tab
+
+**Fields**:
+- Current Password (verification)
+- New Password
+- Confirm New Password
+
+**Endpoint**: `PUT /users/profile/password`  
+**Controller**: `authController.js:308-345`
+
+<Steps>
+  <Step title="Match Check">
+    ```javascript
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({
+            message: 'New passwords do not match'
+        });
+    }
+    ```
+  </Step>
+  
+  <Step title="Verify Current Password">
+    ```javascript
+    const user = await customerDAO.getCustomerById(userId);
+    const passwordMatch = await bcrypt.compare(currentPassword, user.password_hash);
+    
+    if (!passwordMatch) {
+        return res.status(401).json({
+            message: 'Current password is incorrect'
+        });
+    }
+    ```
+  </Step>
+  
+  <Step title="Hash & Save">
+    ```javascript
+    const saltRounds = 10;
+    const newHash = await bcrypt.hash(newPassword, saltRounds);
+    await customerDAO.updateCustomerPassword(userId, newHash);
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  **Social Login Users**: If account was created via Google/Facebook, password change is blocked (password_hash starts with `SOCIAL_LOGIN_`).
+</Warning>
+
+---
+
+## Virtual Garage (Vehicle Management)
+
+The system automatically tracks vehicles associated with the user:
+
+### How Vehicles Are Added
+
+1. **During Booking**: When user creates a reservation, the vehicle is added to `vehicle` table and linked via `customer_vehicle`
+2. **Auto-link**: Existing vehicles (by license plate) are automatically linked if used in new reservation
+
+### Data Structure
+
+```sql
+-- customer_vehicle table (many-to-many)
+CREATE TABLE customer_vehicle (
+    id_customer INT REFERENCES customer(id_customer),
+    id_vehicle INT REFERENCES vehicle(id_vehicle),
+    PRIMARY KEY (id_customer, id_vehicle)
+);
+```
+
+### Frontend Display
+
+Vehicles are loaded in profile via:
+```javascript
+const vehicles = await customerDAO.getVehiclesByCustomerId(userId);
+```
+
+**Current Implementation**: Vehicles shown in booking form (first vehicle auto-fills). Future versions may show a dedicated "My Vehicles" section.
+
+---
+
+## Booking History
+
+### Filtering
+
+History panel shows only completed/cancelled reservations:
+
+```javascript
+// profile.ejs:94-127
+<% historyReservations.forEach(function(item) { %>
+  <div class="historial-item">
+    <div class="historial-fecha">
+      <i class="fas fa-calendar-alt"></i>
+      <%= new Date(item.entry_date).toLocaleDateString('es-ES') %>
+    </div>
+    <div class="historial-servicio">
+      <i class="fas fa-car"></i>
+      <%= item.license_plate %>
+    </div>
+    <div class="historial-precio">
+      <strong><%= parseFloat(item.total_price).toFixed(2) %> €</strong>
+    </div>
+  </div>
+<% }) %>
+```
+
+### No Actions Allowed
+
+Unlike active reservations, historical ones are **read-only**:
+- Cannot cancel (already finished/cancelled)
+- Cannot edit (immutable for accounting)
+- Can view details for records
+
+---
+
+## Security & Permissions
+
+<AccordionGroup>
+  <Accordion title="Authentication Middleware">
+    Profile route requires valid session:
+    ```javascript
+    // middleware/auth.js
+    function requireAuth(req, res, next) {
+        if (!req.session.user) {
+            return res.redirect('/users/login');
+        }
+        next();
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Ownership Validation">
+    All reservation actions verify `id_customer`:
+    ```javascript
+    if (reserva.id_customer !== req.session.user.id) {
+        return res.status(403).json({ message: 'Forbidden' });
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Status-based Permissions">
+    - **PENDIENTE**: Can cancel or edit
+    - **EN CURSO**: Can edit (with restrictions) but not cancel
+    - **FINALIZADA/CANCELADA**: View only
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## UI/UX Features
+
+<CardGroup cols={2}>
+  <Card title="Scrollable Lists" icon="scroll">
+    Active reservations limited to 250px height with overflow scroll (profile.ejs:41)
+  </Card>
+  
+  <Card title="Status Color Coding" icon="palette">
+    CSS classes:
+    - `.badge-pendiente` (yellow)
+    - `.badge-en-curso` (blue)
+    - `.badge-finalizada` (green)
+    - `.badge-cancelada` (red)
+  </Card>
+  
+  <Card title="Modal System" icon="window-maximize">
+    3 modals:
+    1. Edit Profile (with tabs)
+    2. Reservation Details
+    3. Edit Reservation
+    
+    Overlay darkens background, ESC to close
+  </Card>
+  
+  <Card title="SweetAlert2" icon="bell">
+    Used for:
+    - Success messages
+    - Error alerts
+    - Confirmation dialogs (e.g., "Cancel this booking?")
+  </Card>
+</CardGroup>
+
+---
+
+## Code References
+
+| Feature | File | Line Range |
+|---------|------|------------|
+| **Profile Render** | `controllers/authController.js` | 248-278 |
+| **Update Profile** | `controllers/authController.js` | 281-305 |
+| **Change Password** | `controllers/authController.js` | 308-345 |
+| **Cancel Reservation** | `controllers/authController.js` | 348-379 |
+| **Edit Reservation** | `controllers/authController.js` | 382-436 |
+| **View Template** | `views/profile.ejs` | Full file |
+| **Client Logic** | `public/javascripts/profile.js` | Modal handlers |
+| **Customer DAO** | `models/customer-dao.js` | CRUD operations |
+| **Reservation DAO** | `models/reservation-dao.js` | `getReservationsByCustomerId()` (574-600) |
+
+---
+
+## Error Scenarios
+
+<CodeGroup>
+```javascript Not Logged In
+// Redirect to login page
+if (!req.session.user) {
+    return res.redirect('/users/login');
+}
+```
+
+```javascript Wrong Customer
+if (reserva.id_customer !== userId) {
+    return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to modify this reservation'
+    });
+}
+```
+
+```javascript Invalid Status Transition
+if (reserva.status !== 'PENDIENTE') {
+    return res.status(400).json({
+        success: false,
+        message: 'Only PENDIENTE reservations can be cancelled'
+    });
+}
+```
+</CodeGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Public Booking" icon="calendar-check" href="/features/public-booking">
+    How users create reservations
+  </Card>
+  
+  <Card title="Reservation Lifecycle" icon="arrows-spin" href="/features/reservation-lifecycle">
+    State transitions and admin processing
+  </Card>
+</CardGroup>

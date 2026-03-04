@@ -1,0 +1,229 @@
+---
+title: 'Create Public Reservation'
+api: 'POST /api/reservations/public-new'
+---
+
+## Overview
+
+Creates a new parking reservation from the public website. This endpoint handles customer registration, vehicle registration, and reservation creation in a single atomic transaction.
+
+This endpoint is **public** and does not require authentication.
+
+## Authentication
+
+No authentication required.
+
+## Request Body
+
+### Customer Information
+
+<ParamField body="full_name" type="string" required>
+  Full name of the customer making the reservation.
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Customer's phone number. Used as the unique identifier for the customer.
+  
+  If a customer with this phone number already exists, the existing customer record will be used.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Customer's email address (optional).
+</ParamField>
+
+### Vehicle Information
+
+<ParamField body="license_plate" type="string" required>
+  Vehicle license plate number. Used as the unique identifier for the vehicle.
+  
+  If a vehicle with this license plate already exists, the existing vehicle record will be used.
+</ParamField>
+
+<ParamField body="brand" type="string" default="Desconocida">
+  Vehicle brand/manufacturer.
+</ParamField>
+
+<ParamField body="model" type="string" default="Desconocido">
+  Vehicle model.
+</ParamField>
+
+<ParamField body="vehicle_type" type="string" required>
+  Type of vehicle (e.g., `COCHE`, `MOTO`, `FURGONETA`, `SUV`).
+</ParamField>
+
+### Reservation Information
+
+<ParamField body="entry_date" type="string" required>
+  Reservation entry date in ISO 8601 format (e.g., `2026-03-10T10:00:00.000Z`).
+</ParamField>
+
+<ParamField body="exit_date" type="string" required>
+  Reservation exit date in ISO 8601 format (e.g., `2026-03-15T10:00:00.000Z`).
+</ParamField>
+
+<ParamField body="id_main_service" type="integer" required>
+  ID of the main parking service selected.
+</ParamField>
+
+<ParamField body="additional_services" type="array" default="[]">
+  Array of additional service IDs (integers) to include in the reservation.
+  
+  Example: `[1, 3, 5]`
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Indicates whether the reservation was created successfully.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success or error message.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Reservation summary object (only present on success).
+  
+  <ResponseField name="data.id_reservation" type="integer">
+    Unique ID of the newly created reservation.
+  </ResponseField>
+  
+  <ResponseField name="data.customer_name" type="string">
+    Customer's full name.
+  </ResponseField>
+  
+  <ResponseField name="data.phone" type="string">
+    Customer's phone number.
+  </ResponseField>
+  
+  <ResponseField name="data.license_plate" type="string">
+    Vehicle license plate.
+  </ResponseField>
+  
+  <ResponseField name="data.brand" type="string">
+    Vehicle brand.
+  </ResponseField>
+  
+  <ResponseField name="data.model" type="string">
+    Vehicle model.
+  </ResponseField>
+  
+  <ResponseField name="data.total_price" type="number">
+    Final calculated price for the reservation.
+  </ResponseField>
+</ResponseField>
+
+## Transaction Behavior
+
+This endpoint performs multiple database operations in a single atomic transaction:
+
+1. **Customer Management**:
+   - If customer with the phone number exists → use existing customer
+   - If customer doesn't exist → create new customer with type `NO-REGISTRADO`
+
+2. **Vehicle Management**:
+   - If vehicle with the license plate exists → use existing vehicle
+   - If vehicle doesn't exist → create new vehicle with provided details
+
+3. **Customer-Vehicle Link**:
+   - Link the customer and vehicle (if not already linked)
+
+4. **Reservation Creation**:
+   - Create reservation with status `PENDIENTE`
+   - Price is recalculated server-side to prevent manipulation
+
+5. **Additional Services**:
+   - Link selected additional services to the reservation
+
+If any step fails, the entire transaction is rolled back and no data is saved.
+
+## Error Codes
+
+| Status Code | Description |
+|-------------|-------------|
+| 201 | Success - Reservation created |
+| 400 | Bad Request - Missing required fields (entry_date, phone, or license_plate) |
+| 500 | Internal Server Error - Database transaction failed |
+
+## Examples
+
+### Complete Request
+
+```bash
+curl -X POST https://api.paparcapp.com/api/reservations/public-new \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Juan Pérez",
+    "phone": "+34612345678",
+    "email": "juan.perez@example.com",
+    "license_plate": "1234ABC",
+    "brand": "Toyota",
+    "model": "Corolla",
+    "vehicle_type": "COCHE",
+    "entry_date": "2026-03-10T10:00:00.000Z",
+    "exit_date": "2026-03-15T10:00:00.000Z",
+    "id_main_service": 1,
+    "additional_services": [2, 4]
+  }'
+```
+
+### Minimal Request
+
+```bash
+curl -X POST https://api.paparcapp.com/api/reservations/public-new \
+  -H "Content-Type: application/json" \
+  -d '{
+    "full_name": "Juan Pérez",
+    "phone": "+34612345678",
+    "license_plate": "1234ABC",
+    "vehicle_type": "COCHE",
+    "entry_date": "2026-03-10T10:00:00.000Z",
+    "exit_date": "2026-03-15T10:00:00.000Z",
+    "id_main_service": 1
+  }'
+```
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "message": "Reserva creada con éxito",
+  "data": {
+    "id_reservation": 42,
+    "customer_name": "Juan Pérez",
+    "phone": "+34612345678",
+    "license_plate": "1234ABC",
+    "brand": "Toyota",
+    "model": "Corolla",
+    "total_price": 145.75
+  }
+}
+```
+
+### Error Response - Missing Required Fields
+
+```json
+{
+  "success": false,
+  "message": "Faltan datos obligatorios."
+}
+```
+
+### Error Response - Database Error
+
+```json
+{
+  "success": false,
+  "message": "Error interno del servidor al procesar tu reserva."
+}
+```
+
+## Notes
+
+- **Price Verification**: The total price is always recalculated server-side using the provided parameters to prevent client-side manipulation.
+- **Customer Type**: All customers created through this endpoint are tagged as `NO-REGISTRADO` to distinguish them from registered app users.
+- **Default Values**: If `brand`, `model`, or `email` are not provided, default values are used (`Desconocida`, `Desconocido`, `null` respectively).
+- **Vehicle Color**: Always set to `No color` for public reservations.
+- **Initial Status**: New reservations always start with status `PENDIENTE` (pending).
+- **Idempotency**: While this endpoint is not strictly idempotent, creating multiple reservations with the same customer/vehicle data will reuse existing customer and vehicle records.

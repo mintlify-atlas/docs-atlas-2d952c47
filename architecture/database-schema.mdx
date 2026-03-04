@@ -1,0 +1,783 @@
+---
+title: 'Database Schema'
+description: 'Complete PostgreSQL schema with 13 tables, relationships, constraints, and indexes for PaparcApp'
+---
+
+## Database Overview
+
+PaparcApp uses **PostgreSQL** as its relational database with a normalized schema consisting of **13 tables**. The database is designed to support:
+
+- Customer and vehicle management
+- Reservation lifecycle (pending → in progress → finalized)
+- Dynamic pricing with vehicle coefficients and rate tiers
+- Additional services and subscription plans
+- Photo evidence and notification tracking
+
+## Entity Relationship Diagram
+
+```
+┌──────────────┐         ┌──────────────────┐         ┌──────────────┐
+│  CUSTOMER    │◄───────►│ CUSTOMER_VEHICLE │◄───────►│   VEHICLE    │
+│              │  N:M    │    (junction)    │  N:M    │              │
+│ id_customer  │         │                  │         │ id_vehicle   │
+│ full_name    │         └──────────────────┘         │ license_plate│
+│ email        │                                      │ brand/model  │
+│ phone        │         ┌──────────────────┐         │ color/type   │
+│ type (role)  │◄────┐   │    CONTRACT      │     ┌──►│              │
+└──────────────┘     │   │                  │     │   └──────┬───────┘
+                     │   │ id_contract      │     │          │
+                     └───┤ id_customer (FK) │     │          │
+                         │ id_vehicle (FK)  │─────┘          │
+                         │ id_plan (FK)     │                │
+                         │ start/end_date   │                │
+                         └────────┬─────────┘                │
+                                  │                          │
+                         ┌────────▼─────────┐                │
+                         │ CONTRACT_PLAN    │                │
+                         │                  │                │
+                         │ id_plan          │                │
+                         │ name             │                │
+                         │ duration_months  │                │
+                         │ price            │                │
+                         └──────────────────┘                │
+                                                              │
+┌──────────────┐         ┌──────────────────┐               │
+│ MAIN_SERVICE │◄────┐   │   RESERVATION    │◄──────────────┘
+│              │     │   │                  │
+│id_main_service    │   │ id_reservation   │
+│ name (ECO,   │     └───┤ id_customer (FK) │
+│ TRANSFER,    │         │ id_vehicle (FK)  │
+│ MEET)        │         │ id_main_service  │
+└──────┬───────┘         │ entry/exit_date  │
+       │                 │ status           │
+       │                 │ total_price      │
+       │                 │ cod_parking_spot │
+       │                 └────┬─────┬───────┘
+       │                      │     │
+       │                      │     └──────────────┐
+       │                      │                    │
+┌──────▼───────┐         ┌───▼───────────┐   ┌────▼──────────┐
+│ SERVICE_RATE │         │ NOTIFICATION  │   │ PHOTO_EVIDENCE│
+│              │         │               │   │               │
+│ id_rate      │         │id_notification│   │ id_photo      │
+│ min_days     │         │id_reservation │   │id_reservation │
+│ max_days     │         │ subject       │   │ file_path     │
+│ daily_price  │         │ message       │   │ description   │
+│id_main_service        │ type          │   └───────────────┘
+└──────────────┘         └───────────────┘
+
+┌─────────────────┐     ┌────────────────────────────┐     ┌─────────────────────┐
+│ADDITIONAL_SERVICE◄────┤ RESERVATION_ADDITIONAL     │────►│    RESERVATION      │
+│                 │ N:M │ _SERVICE (junction)        │ N:M │                     │
+│id_additional_   │     │                            │     └─────────────────────┘
+│  service        │     │ id_reservation (FK)        │
+│ name            │     │ id_additional_service (FK) │
+│ category        │     └────────────────────────────┘
+│ price           │
+└─────────────────┘
+
+┌──────────────────────┐
+│ VEHICLE_COEFFICIENT  │  (Master table for pricing)
+│                      │
+│ vehicle_type (PK)    │
+│ multiplier           │
+└──────────────────────┘
+```
+
+## Table Definitions
+
+### 1. CUSTOMER
+
+Stores customer information with three user types: ADMIN, REGISTRADO (registered), and NO-REGISTRADO (guest).
+
+```sql
+CREATE TABLE customer (
+    id_customer       SERIAL PRIMARY KEY,
+    full_name         VARCHAR(100) NOT NULL,
+    email             VARCHAR(150) UNIQUE,
+    phone             VARCHAR(20) UNIQUE,
+    password_hash     VARCHAR(255),
+    registration_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    type              VARCHAR(30), 
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE
+);
+```
+
+**Key Fields:**
+- `id_customer`: Auto-incrementing primary key
+- `email` / `phone`: Unique identifiers for user lookup
+- `password_hash`: bcrypt-hashed password (NULL for guest users)
+- `type`: User role (`ADMIN`, `REGISTRADO`, `NO-REGISTRADO`)
+- `is_active`: Soft delete flag
+
+**Constraints:**
+```sql
+ALTER TABLE customer
+    ADD CONSTRAINT chk_customer_type
+    CHECK (type IN ('ADMIN', 'REGISTRADO', 'NO-REGISTRADO'));
+
+ALTER TABLE customer
+    ADD CONSTRAINT chk_customer_email_format
+    CHECK (email IS NULL OR email LIKE '%_@__%.__%');
+
+ALTER TABLE customer
+    ADD CONSTRAINT chk_customer_phone_format
+    CHECK (LENGTH(phone) >= 7 OR phone IS NULL);
+```
+
+### 2. VEHICLE
+
+Stores vehicle information independent of ownership (many-to-many relationship with customers).
+
+```sql
+CREATE TABLE vehicle (
+    id_vehicle         SERIAL PRIMARY KEY,
+    license_plate      VARCHAR(15) NOT NULL UNIQUE,
+    brand              VARCHAR(50) NOT NULL,
+    model              VARCHAR(50) NOT NULL,
+    color              VARCHAR(30) NOT NULL, 
+    type               VARCHAR(30) NOT NULL, 
+    registration_date  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**Key Fields:**
+- `license_plate`: Unique vehicle identifier
+- `type`: Vehicle category (TURISMO, MOTOCICLETA, FURGONETA, CARAVANA, ESPECIAL)
+- `type` is a **foreign key** to `vehicle_coefficient.vehicle_type` for pricing
+
+**Foreign Key:**
+```sql
+ALTER TABLE vehicle
+    ADD CONSTRAINT fk_vehicle_type
+    FOREIGN KEY (type)
+    REFERENCES vehicle_coefficient(vehicle_type)
+    ON DELETE RESTRICT
+    ON UPDATE CASCADE;
+```
+
+### 3. CUSTOMER_VEHICLE
+
+**Junction table** for the many-to-many relationship between customers and vehicles.
+
+```sql
+CREATE TABLE customer_vehicle (
+    id_customer     INT NOT NULL,
+    id_vehicle      INT NOT NULL,
+    linked_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id_customer, id_vehicle)
+);
+```
+
+**Purpose:** Customers can own multiple vehicles, and vehicles can be shared (e.g., family members)
+
+**Foreign Keys:**
+```sql
+ALTER TABLE customer_vehicle
+    ADD CONSTRAINT fk_cv_customer
+    FOREIGN KEY (id_customer) REFERENCES customer(id_customer)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE customer_vehicle
+    ADD CONSTRAINT fk_cv_vehicle
+    FOREIGN KEY (id_vehicle) REFERENCES vehicle(id_vehicle)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+```
+
+**Index:**
+```sql
+CREATE INDEX idx_search_owners_by_vehicle_id 
+    ON customer_vehicle(id_vehicle);
+```
+
+### 4. MAIN_SERVICE
+
+Defines the three core parking services offered by PaparcApp.
+
+```sql
+CREATE TABLE main_service (
+    id_main_service   SERIAL PRIMARY KEY,
+    name              VARCHAR(100) NOT NULL UNIQUE,
+    tagline           VARCHAR(150) NOT NULL, 
+    full_description  TEXT NOT NULL,                 
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE
+);
+```
+
+**Services:**
+1. **ECO** - Walk to terminal (cheapest)
+2. **TRANSFER** - Minibus to terminal
+3. **MEET** - Premium valet service
+
+**Sample Data:**
+```sql
+INSERT INTO main_service (name, tagline, full_description) VALUES 
+('ECO', 'Arrive, hand over your keys and walk straight to your flight.', 
+ 'Vehicle reception by our staff|Professional parking guaranteed|...'),
+('TRANSFER', 'Hand over your car and we take you to the terminal by minibus.', 
+ 'Parking performed by staff|VIP transfer in courtesy minibus|...'),
+('MEET', 'Premium Service: Pick-up and drop-off at the terminal.', 
+ 'Professional chauffeur awaits you at the terminal|...');
+```
+
+### 5. SERVICE_RATE
+
+Pricing tiers based on service type and stay duration (days).
+
+```sql
+CREATE TABLE service_rate (
+    id_rate         SERIAL PRIMARY KEY,
+    min_days        INT NOT NULL,
+    max_days        INT NOT NULL,
+    daily_price     NUMERIC(8,2) NOT NULL,
+    id_main_service INT NOT NULL -- FK
+);
+```
+
+**Example Rates:**
+```sql
+INSERT INTO service_rate (id_main_service, min_days, max_days, daily_price) VALUES
+-- ECO Service
+(1, 1, 3, 12.00),    -- 1-3 days: €12/day
+(1, 4, 10, 8.00),    -- 4-10 days: €8/day
+(1, 11, 15, 6.00),   -- 11-15 days: €6/day
+(1, 16, 9999, 5.00), -- 16+ days: €5/day
+
+-- TRANSFER Service
+(2, 1, 3, 15.00),
+(2, 4, 10, 11.00),
+(2, 11, 15, 9.00),
+(2, 16, 9999, 8.00),
+
+-- MEET Service (Premium)
+(3, 1, 3, 18.00),
+(3, 4, 10, 14.00),
+(3, 11, 15, 12.00),
+(3, 16, 9999, 11.00);
+```
+
+**Constraints:**
+```sql
+ALTER TABLE service_rate
+    ADD CONSTRAINT chk_rate_days_range
+    CHECK (min_days > 0 AND max_days >= min_days);
+
+ALTER TABLE service_rate
+    ADD CONSTRAINT chk_rate_positive_price
+    CHECK (daily_price >= 0);
+
+-- Prevent overlapping rate tiers
+ALTER TABLE service_rate
+    ADD CONSTRAINT unique_rate_days
+    UNIQUE (id_main_service, min_days);
+```
+
+**Foreign Key:**
+```sql
+ALTER TABLE service_rate
+    ADD CONSTRAINT fk_service_rate_main_service
+    FOREIGN KEY (id_main_service) REFERENCES main_service(id_main_service)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+```
+
+### 6. VEHICLE_COEFFICIENT
+
+**Master table** for vehicle pricing multipliers.
+
+```sql
+CREATE TABLE vehicle_coefficient (
+    vehicle_type    VARCHAR(30) PRIMARY KEY,
+    multiplier      NUMERIC(4,2) NOT NULL DEFAULT 1.00
+);
+```
+
+**Pricing Multipliers:**
+```sql
+INSERT INTO vehicle_coefficient (vehicle_type, multiplier) VALUES 
+('TURISMO', 1.00),      -- Standard car (baseline)
+('MOTOCICLETA', 0.50),  -- Motorcycle (50% discount)
+('FURGONETA', 1.25),    -- Van (25% premium)
+('CARAVANA', 2.00),     -- Caravan (100% premium)
+('ESPECIAL', 1.50);     -- Special vehicles (50% premium)
+```
+
+**Constraint:**
+```sql
+ALTER TABLE vehicle_coefficient
+    ADD CONSTRAINT chk_vehicle_coefficient_positive
+    CHECK (multiplier > 0);
+```
+
+### 7. ADDITIONAL_SERVICE
+
+Optional services customers can add to reservations (car wash, refueling, etc.).
+
+```sql
+CREATE TABLE additional_service (
+    id_additional_service SERIAL PRIMARY KEY,
+    name                  VARCHAR(100) NOT NULL UNIQUE,
+    category              VARCHAR(50) NOT NULL, 
+    tagline               VARCHAR(150),         
+    price                 NUMERIC(8,2) NOT NULL,
+    features              TEXT,                 
+    is_active             BOOLEAN NOT NULL DEFAULT TRUE
+);
+```
+
+**Categories:**
+- **CLEANING**: Washes, interior cleaning, detailing
+- **MANAGEMENT**: Refueling, MOT service
+- **MAINTENANCE**: Fluid checks, tire pressure
+- **ENERGY**: EV charging
+
+**Sample Services:**
+```sql
+INSERT INTO additional_service (name, category, tagline, price, features) VALUES 
+('Basic Wash', 'CLEANING', 'Shine on the outside.', 15.00, 
+ 'Hand exterior wash|Microfiber drying|Wheel and tire cleaning'),
+('Interior Cleaning', 'CLEANING', 'Hygiene and freshness inside.', 25.00, 
+ 'Deep vacuuming of mats|Technical dashboard cleaning|Air duct disinfection'),
+('Full Wash', 'CLEANING', 'Your car, as good as new.', 50.00, 
+ 'Upholstery cleaning|Premium exterior wash|Odor removal with ozone'),
+('Refueling', 'MANAGEMENT', 'No stops when leaving the parking.', 15.00, 
+ 'Tank filled before delivery|Time saving|Fuel at market price'),
+('EV Charging', 'ENERGY', '100% battery upon landing.', 25.00, 
+ 'Full electric charge|Compatible with all models');
+```
+
+**Constraint:**
+```sql
+ALTER TABLE additional_service
+    ADD CONSTRAINT chk_additional_service_price
+    CHECK (price >= 0);
+```
+
+### 8. RESERVATION
+
+**Core table** tracking parking reservations with lifecycle management.
+
+```sql
+CREATE TABLE reservation (
+    id_reservation    SERIAL PRIMARY KEY,
+    reservation_date  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    entry_date        TIMESTAMP NOT NULL,
+    exit_date         TIMESTAMP,
+    status            VARCHAR(30) NOT NULL DEFAULT 'PENDIENTE',
+    total_price       NUMERIC(10,2) NOT NULL,
+    is_paid           BOOLEAN NOT NULL DEFAULT FALSE,
+    payment_method    VARCHAR(30),
+    notes             TEXT,
+    id_customer       INT NOT NULL, -- FK
+    id_vehicle        INT NOT NULL, -- FK
+    id_main_service   INT NOT NULL, -- FK
+    cod_parking_spot  VARCHAR(20)
+);
+```
+
+**Status Flow:**
+```
+PENDIENTE → EN CURSO → FINALIZADA
+                  ↓
+              CANCELADA
+```
+
+**Key Fields:**
+- `reservation_date`: When reservation was created
+- `entry_date`: When vehicle enters parking
+- `exit_date`: When vehicle leaves (NULL if not yet determined)
+- `status`: Current reservation state
+- `cod_parking_spot`: Assigned parking spot (NULL until vehicle arrives)
+- `is_paid`: Payment status
+- `payment_method`: TARJETA (card) or EFECTIVO (cash)
+
+**Foreign Keys:**
+```sql
+ALTER TABLE reservation
+    ADD CONSTRAINT fk_reservation_customer
+    FOREIGN KEY (id_customer) REFERENCES customer(id_customer)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE reservation
+    ADD CONSTRAINT fk_reservation_vehicle
+    FOREIGN KEY (id_vehicle) REFERENCES vehicle(id_vehicle)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE reservation
+    ADD CONSTRAINT fk_reservation_main_service
+    FOREIGN KEY (id_main_service) REFERENCES main_service(id_main_service)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+**Complex Constraints:**
+
+```sql
+-- Status must be valid
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_reservation_status
+    CHECK (status IN ('PENDIENTE', 'EN CURSO', 'FINALIZADA', 'CANCELADA'));
+
+-- Payment method validation
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_reservation_payment_method
+    CHECK (payment_method IN ('TARJETA', 'EFECTIVO') OR payment_method IS NULL);
+
+-- No negative prices
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_reservation_total_price
+    CHECK (total_price >= 0);
+
+-- Exit must be after entry
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_reservation_exit_date
+    CHECK (exit_date IS NULL OR exit_date >= entry_date);
+
+-- Parking spot required for active/finished reservations
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_spot_assigned
+    CHECK (
+        (status IN ('EN CURSO', 'FINALIZADA') AND cod_parking_spot IS NOT NULL)
+        OR
+        (status IN ('PENDIENTE', 'CANCELADA'))
+    );
+
+-- Must be paid to finalize
+ALTER TABLE reservation
+    ADD CONSTRAINT chk_reservation_must_be_paid
+    CHECK (
+        (status = 'FINALIZADA' AND is_paid = TRUE)
+        OR
+        (status <> 'FINALIZADA')
+    );
+```
+
+**Indexes (for performance):**
+```sql
+CREATE INDEX idx_search_reservation_by_vehicle_id 
+    ON reservation(id_vehicle);
+
+CREATE INDEX idx_search_reservation_by_customer_id 
+    ON reservation(id_customer);
+
+CREATE INDEX idx_search_reservation_by_entry_date 
+    ON reservation(entry_date);
+
+CREATE INDEX idx_search_reservation_by_exit_date 
+    ON reservation(exit_date);
+
+-- Composite indexes for common queries
+CREATE INDEX idx_search_reservation_by_entry_date_status 
+    ON reservation(entry_date, status);
+
+CREATE INDEX idx_search_reservation_by_exit_date_status 
+    ON reservation(exit_date, status);
+```
+
+### 9. RESERVATION_ADDITIONAL_SERVICE
+
+**Junction table** linking reservations to additional services (many-to-many).
+
+```sql
+CREATE TABLE reservation_additional_service (
+    id_reservation        INT NOT NULL,
+    id_additional_service INT NOT NULL,
+    PRIMARY KEY (id_reservation, id_additional_service)
+);
+```
+
+**Foreign Keys:**
+```sql
+ALTER TABLE reservation_additional_service
+    ADD CONSTRAINT fk_ras_reservation
+    FOREIGN KEY (id_reservation) REFERENCES reservation(id_reservation)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE reservation_additional_service
+    ADD CONSTRAINT fk_ras_additional_service
+    FOREIGN KEY (id_additional_service) REFERENCES additional_service(id_additional_service)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+**Usage Example:**
+```sql
+-- Reservation #7 includes MOT Service and Basic Wash
+INSERT INTO reservation_additional_service (id_reservation, id_additional_service) 
+VALUES (7, 6), (7, 1);
+```
+
+### 10. PHOTO_EVIDENCE
+
+Stores file paths for vehicle condition photos (5 photos minimum per reservation).
+
+```sql
+CREATE TABLE photo_evidence (
+    id_photo          SERIAL PRIMARY KEY,
+    file_path         VARCHAR(255) NOT NULL,
+    description       VARCHAR(200),
+    taken_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id_reservation    INT NOT NULL --FK
+);
+```
+
+**Standard Photos:**
+1. Front view
+2. Back view
+3. Left side
+4. Right side
+5. Dashboard
+
+**Foreign Key:**
+```sql
+ALTER TABLE photo_evidence
+    ADD CONSTRAINT fk_photo_reservation
+    FOREIGN KEY (id_reservation) REFERENCES reservation(id_reservation)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+```
+
+**Index:**
+```sql
+CREATE INDEX idx_search_photo_by_reservation_id 
+    ON photo_evidence(id_reservation);
+```
+
+### 11. NOTIFICATION
+
+Audit log of communications sent to customers.
+
+```sql
+CREATE TABLE notification (
+    id_notification   SERIAL PRIMARY KEY,
+    subject           VARCHAR(150) NOT NULL,
+    message           TEXT NOT NULL,
+    type              VARCHAR(50) NOT NULL,
+    sent_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id_reservation    INT NOT NULL --FK
+);
+```
+
+**Notification Types:**
+```sql
+ALTER TABLE notification
+    ADD CONSTRAINT chk_notification_type
+    CHECK (type IN (
+        'TICKET_RESERVA',           -- Reservation confirmation
+        'ENTRADA_CONFIRMADA',       -- Vehicle received
+        'RECIBO_PAGO',              -- Payment receipt
+        'ACTUALIZACION_RESERVA'     -- Reservation updated
+    ));
+```
+
+**Foreign Key:**
+```sql
+ALTER TABLE notification
+    ADD CONSTRAINT fk_notification_reservation
+    FOREIGN KEY (id_reservation) REFERENCES reservation(id_reservation)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+```
+
+**Index:**
+```sql
+CREATE INDEX idx_search_notification_by_reservation_id 
+    ON notification(id_reservation);
+```
+
+### 12. CONTRACT_PLAN
+
+Subscription plans for frequent customers.
+
+```sql
+CREATE TABLE contract_plan (
+    id_plan          SERIAL PRIMARY KEY,
+    name             VARCHAR(50) NOT NULL UNIQUE,
+    duration_months  INT NOT NULL,
+    price            NUMERIC(8,2) NOT NULL,
+    tagline          VARCHAR(150), 
+    features         TEXT,         
+    is_active        BOOLEAN NOT NULL DEFAULT TRUE
+);
+```
+
+**Available Plans:**
+```sql
+INSERT INTO contract_plan (name, duration_months, price, tagline, features) VALUES
+('Quarterly', 3, 325.00, 'The perfect solution for your seasonal trips.', 
+ 'ECO and TRANSFER services included|100% guaranteed priority spot|...'),
+('Semiannual', 6, 590.00, 'Save and travel with total freedom for half a year.', 
+ 'ECO and TRANSFER services included|1 complimentary full wash|...'),
+('Annual', 12, 999.00, 'Maximum peace of mind and savings for expert travelers.', 
+ 'Fixed VIP spot guaranteed|2 full washes per year|10% discount on extras|...');
+```
+
+**Constraint:**
+```sql
+ALTER TABLE contract_plan
+    ADD CONSTRAINT chk_contract_plan_values
+    CHECK (duration_months > 0 AND price > 0);
+```
+
+### 13. CONTRACT
+
+Active subscriptions linking customers and vehicles to plans.
+
+```sql
+CREATE TABLE contract (
+    id_contract     SERIAL PRIMARY KEY,
+    start_date      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    end_date        TIMESTAMP NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    id_customer     INT NOT NULL, -- FK
+    id_vehicle      INT NOT NULL, -- FK
+    id_plan         INT NOT NULL  -- FK
+);
+```
+
+**Foreign Keys:**
+```sql
+ALTER TABLE contract
+    ADD CONSTRAINT fk_contract_customer
+    FOREIGN KEY (id_customer) REFERENCES customer(id_customer)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE contract
+    ADD CONSTRAINT fk_contract_vehicle
+    FOREIGN KEY (id_vehicle) REFERENCES vehicle(id_vehicle)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE contract
+    ADD CONSTRAINT fk_contract_plan
+    FOREIGN KEY (id_plan) REFERENCES contract_plan(id_plan)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+```
+
+**Constraint:**
+```sql
+ALTER TABLE contract
+    ADD CONSTRAINT chk_contract_dates
+    CHECK (end_date > start_date);
+```
+
+## Database Relationships Summary
+
+### One-to-Many Relationships
+
+| Parent Table | Child Table | Relationship |
+|-------------|-------------|-------------|
+| customer | reservation | One customer → many reservations |
+| vehicle | reservation | One vehicle → many reservations |
+| main_service | reservation | One service → many reservations |
+| main_service | service_rate | One service → many rate tiers |
+| reservation | photo_evidence | One reservation → many photos |
+| reservation | notification | One reservation → many notifications |
+| contract_plan | contract | One plan → many contracts |
+
+### Many-to-Many Relationships
+
+| Entity 1 | Junction Table | Entity 2 | Meaning |
+|---------|----------------|----------|----------|
+| customer | customer_vehicle | vehicle | Customers can own/share multiple vehicles |
+| reservation | reservation_additional_service | additional_service | Reservations can have multiple add-ons |
+
+### Master-Detail Relationships
+
+| Master Table | Detail Table | Purpose |
+|-------------|--------------|----------|
+| vehicle_coefficient | vehicle | Vehicle types must exist in master table |
+| main_service | service_rate | Rate tiers defined per service |
+
+## Indexes Overview
+
+All indexes created for query performance optimization:
+
+```sql
+-- Reservation lookups (most frequent operations)
+CREATE INDEX idx_search_reservation_by_vehicle_id ON reservation(id_vehicle);
+CREATE INDEX idx_search_reservation_by_customer_id ON reservation(id_customer);
+CREATE INDEX idx_search_reservation_by_entry_date ON reservation(entry_date);
+CREATE INDEX idx_search_reservation_by_exit_date ON reservation(exit_date);
+
+-- Composite indexes for dashboard queries
+CREATE INDEX idx_search_reservation_by_entry_date_status 
+    ON reservation(entry_date, status);
+CREATE INDEX idx_search_reservation_by_exit_date_status 
+    ON reservation(exit_date, status);
+
+-- Vehicle ownership lookups
+CREATE INDEX idx_search_owners_by_vehicle_id ON customer_vehicle(id_vehicle);
+
+-- Related records
+CREATE INDEX idx_search_photo_by_reservation_id ON photo_evidence(id_reservation);
+CREATE INDEX idx_search_notification_by_reservation_id ON notification(id_reservation);
+```
+
+**Note:** Primary keys and UNIQUE constraints automatically create indexes, so no manual index creation is needed for those columns.
+
+## Constraint Summary
+
+### Data Integrity Constraints
+
+- **Foreign Keys**: 15 foreign key relationships ensuring referential integrity
+- **Check Constraints**: 16 validation rules for business logic
+- **Unique Constraints**: 8 uniqueness requirements (email, phone, license_plate, etc.)
+- **Not Null Constraints**: Critical fields cannot be NULL
+
+### Business Logic Constraints
+
+1. **Reservation Lifecycle**: Status transitions must follow PENDIENTE → EN CURSO → FINALIZADA
+2. **Payment Validation**: FINALIZADA reservations must be marked as paid
+3. **Parking Spot Assignment**: EN CURSO and FINALIZADA require assigned spots
+4. **Date Validation**: exit_date must be after entry_date
+5. **Pricing Validation**: All prices must be non-negative
+6. **Rate Tiers**: No overlapping day ranges for same service
+
+## Database Initialization
+
+The database is initialized using 4 SQL scripts:
+
+1. **01_tables.sql**: Creates all 13 tables
+2. **02_constraints.sql**: Adds foreign keys and check constraints
+3. **03_indexes.sql**: Creates performance indexes
+4. **04_initial_data.sql**: Loads seed data (services, rates, coefficients, sample users/reservations)
+
+**Execution Order:**
+```bash
+psql -U user -d database < 01_tables.sql
+psql -U user -d database < 02_constraints.sql
+psql -U user -d database < 03_indexes.sql
+psql -U user -d database < 04_initial_data.sql
+```
+
+## Connection Configuration
+
+PaparcApp connects to PostgreSQL using a connection pool:
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false // Required for cloud databases
+    }
+});
+```
+
+**Environment Variable:**
+```
+DATABASE_URL=postgresql://user:password@host:5432/database?sslmode=require
+```
+
+The pool automatically manages connections, providing:
+- Connection reuse
+- Automatic reconnection
+- Concurrent query handling
+- Connection limits and timeouts
+
+## Summary
+
+The PaparcApp database schema is:
+- **Normalized** to 3rd Normal Form (3NF)
+- **Performance-optimized** with strategic indexes
+- **Integrity-protected** with comprehensive constraints
+- **Cloud-ready** with SSL support and connection pooling
+- **Well-documented** with inline SQL comments and constraint naming
+
+The schema supports the full reservation lifecycle from booking through payment, with robust pricing calculations, customer management, and audit trails.

@@ -1,0 +1,537 @@
+---
+title: 'Architecture Overview'
+description: 'MVC architecture, Express.js configuration, routing system, and middleware pipeline in PaparcApp'
+---
+
+## System Architecture
+
+PaparcApp follows a **Model-View-Controller (MVC)** architecture pattern built on top of Express.js, a minimal and flexible Node.js web application framework.
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        CLIENT LAYER                         │
+│  (Web Browser - EJS Templates + Client-side JavaScript)     │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     EXPRESS.JS SERVER                       │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  MIDDLEWARE PIPELINE                                  │ │
+│  │  ├─ Logger (Morgan)                                   │ │
+│  │  ├─ Body Parser (JSON/URL Encoded)                   │ │
+│  │  ├─ Cookie Parser                                     │ │
+│  │  ├─ Session Management (express-session)             │ │
+│  │  ├─ Authentication Middleware (authLocalsMiddleware)  │ │
+│  │  └─ Static File Server (public/)                     │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                         │                                   │
+│                         ▼                                   │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  ROUTING LAYER                                        │ │
+│  │  ├─ / (index) → Main Controller                      │ │
+│  │  ├─ /users → Auth Controller                         │ │
+│  │  ├─ /admin → Admin Controller [protected]           │ │
+│  │  └─ /api → API Controller                            │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                         │                                   │
+│                         ▼                                   │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  CONTROLLER LAYER                                     │ │
+│  │  ├─ mainController.js (Public pages)                 │ │
+│  │  ├─ authController.js (Login/Register/Logout)        │ │
+│  │  ├─ adminController.js (Dashboard & Management)      │ │
+│  │  └─ apiController.js (REST API endpoints)            │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                         │                                   │
+│                         ▼                                   │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  SERVICE LAYER                                        │ │
+│  │  └─ PricingService (Singleton - In-Memory Cache)     │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                         │                                   │
+│                         ▼                                   │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  MODEL LAYER (DAO Pattern)                           │ │
+│  │  ├─ customer-dao.js                                  │ │
+│  │  ├─ vehicle-dao.js                                   │ │
+│  │  ├─ reservation-dao.js                               │ │
+│  │  ├─ pricing-dao.js                                   │ │
+│  │  └─ service-catalog-dao.js                           │ │
+│  └───────────────────────────────────────────────────────┘ │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              DATABASE LAYER (PostgreSQL)                    │
+│  Connection Pool (pg) - 13 Tables with Constraints          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Express.js Configuration
+
+The main application entry point is `app.js`, which configures the Express server:
+
+### Core Configuration
+
+```javascript
+var express = require('express');
+var app = express();
+
+// View Engine Setup
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+```
+
+**View Engine**: EJS (Embedded JavaScript) templates for server-side rendering
+
+### Middleware Pipeline
+
+Middleware is executed in order for every request:
+
+```javascript
+// 1. Request Logging
+app.use(logger('dev'));
+
+// 2. Body Parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// 3. Cookie Parsing
+app.use(cookieParser());
+
+// 4. Static File Serving
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 5. Session Management
+app.set('trust proxy', 1);
+app.use(session({ 
+  secret: process.env.SESSION_SECRET || 'clave_secreta',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 1000*60*60, // 1 hour
+    secure: process.env.NODE_ENV === 'production'
+  } 
+}));
+
+// 6. Custom Authentication Middleware
+app.use(authLocalsMiddleware);
+```
+
+**Key Middleware Functions:**
+
+- **logger('dev')**: HTTP request logging using Morgan
+- **express.json()**: Parses incoming JSON payloads
+- **express.urlencoded()**: Parses URL-encoded form data
+- **cookieParser()**: Parses Cookie header and populates `req.cookies`
+- **express.static()**: Serves static assets (CSS, JS, images) from `public/`
+- **session()**: Maintains user sessions with server-side storage
+- **authLocalsMiddleware**: Injects authentication state into response locals
+
+### Session Configuration
+
+```javascript
+app.set('trust proxy', 1); // Trust Render.com load balancer
+app.use(session({ 
+  secret: process.env.SESSION_SECRET,
+  resave: false, // Don't save session if unmodified
+  saveUninitialized: false, // Don't create empty sessions
+  cookie: {
+    maxAge: 1000*60*60, // 1 hour session lifetime
+    secure: process.env.NODE_ENV === 'production' // HTTPS only in production
+  } 
+}));
+```
+
+**Session Features:**
+- Sessions persist user authentication across requests
+- Session data stored server-side with client cookie identifier
+- Secure cookies in production (HTTPS required)
+- Trust proxy setting for cloud deployment (Render.com)
+
+## Routing System
+
+PaparcApp uses a modular routing approach with four main routers:
+
+```javascript
+var indexRouter = require('./routes/index');
+var usersRouter = require('./routes/users');
+var adminRouter = require('./routes/admin');
+var apiRouter = require('./routes/api');
+
+app.use('/', indexRouter);        // Public pages
+app.use('/users', usersRouter);   // Authentication
+app.use('/admin', adminRouter);   // Admin dashboard
+app.use('/api', apiRouter);       // REST API
+```
+
+### Route Structure
+
+#### 1. Public Routes (`/`)
+
+```javascript
+router.get('/', mainController.renderIndex);          // Home page
+router.get('/service', mainController.renderServices); // Services page
+router.get('/privacy', mainController.renderPrivacy); // Privacy policy
+router.get('/price', mainController.renderPricing);   // Pricing page
+router.get('/booking', mainController.renderBooking); // Booking form
+```
+
+**Location**: `routes/index.js`  
+**Controller**: `mainController.js`  
+**Purpose**: Public-facing pages for customers
+
+#### 2. Authentication Routes (`/users`)
+
+```javascript
+router.get('/login', authController.renderLogin);      // Login page
+router.post('/login', authController.login);           // Login handler
+router.get('/register', authController.renderRegister); // Register page
+router.post('/register', authController.register);     // Register handler
+router.get('/logout', authController.logout);          // Logout handler
+router.get('/profile', authController.renderProfile);  // User profile
+```
+
+**Location**: `routes/users.js`  
+**Controller**: `authController.js`  
+**Purpose**: User authentication and account management
+
+#### 3. Admin Routes (`/admin`) - Protected
+
+```javascript
+router.use(isAdmin); // All routes protected by isAdmin middleware
+
+// Dashboard
+router.get('/dashboard', adminController.getDashboard);
+router.get('/dashboard/dashboard_booking', adminController.getNewReservationForm);
+
+// Reservation Management
+router.get('/reservations/details/:id', adminController.getReservationInfo);
+router.post('/reservations/new', adminController.createNewReservation);
+router.post('/reservations/:id/edit', adminController.updateReservation);
+router.patch('/reservations/:id/cancel', adminController.cancelReservation);
+router.patch('/reservations/:id/start', adminController.startReservation);
+router.patch('/reservations/:id/finalize', adminController.finalizeReservation);
+router.post('/reservations/:id/photos', adminController.addPhoto);
+
+// History
+router.get('/history', adminController.getHistory);
+```
+
+**Location**: `routes/admin.js`  
+**Controller**: `adminController.js`  
+**Middleware**: `isAdmin` (blocks non-admin users)  
+**Purpose**: Administrative dashboard for managing reservations
+
+#### 4. API Routes (`/api`)
+
+```javascript
+// Protected endpoint (admin only)
+router.get('/reservations', isAdmin, apiController.getReservationsByDate);
+
+// Public endpoints
+router.post('/pricing/dynamic', apiController.calculatePriceDynamic);
+router.post('/reservations/public-new', apiController.createPublicReservation);
+```
+
+**Location**: `routes/api.js`  
+**Controller**: `apiController.js`  
+**Purpose**: RESTful API for AJAX requests and public booking
+
+## Authentication Middleware
+
+PaparcApp implements three authentication middleware functions:
+
+### 1. authLocalsMiddleware
+
+```javascript
+const authLocalsMiddleware = (req, res, next) => {
+    if (req.session.user) {
+        res.locals.isLoggedIn = true;
+        res.locals.user = req.session.user;
+        res.locals.isAdmin = req.session.user.role === 'ADMIN';
+    } else {
+        res.locals.isLoggedIn = false;
+        res.locals.user = null;
+        res.locals.isAdmin = false;
+    }
+    next();
+};
+```
+
+**Purpose**: Injects authentication state into `res.locals` for EJS templates  
+**Location**: `middlewares/auth.js`  
+**Usage**: Applied globally to all routes  
+**Variables exposed**:
+- `isLoggedIn`: Boolean indicating if user is authenticated
+- `user`: User object with id, name, email, role
+- `isAdmin`: Boolean indicating if user has ADMIN role
+
+### 2. isLoggedIn
+
+```javascript
+const isLoggedIn = (req, res, next) => {
+    if (req.session.user) {
+        next();
+    } else {
+        res.redirect('/users/login');
+    }
+};
+```
+
+**Purpose**: Protects routes requiring authentication  
+**Behavior**: Redirects to login page if not authenticated  
+**Usage**: Apply to protected routes (e.g., user profile)
+
+### 3. isAdmin
+
+```javascript
+const isAdmin = (req, res, next) => {
+    if (req.session.user && req.session.user.role === 'ADMIN') {
+        next();
+    } else {
+        res.redirect('/');
+    }
+};
+```
+
+**Purpose**: Protects admin-only routes  
+**Behavior**: Redirects to home page if not admin  
+**Usage**: Applied to all `/admin/*` routes
+
+## Services Layer
+
+### PricingService (Singleton Pattern)
+
+The PricingService is a **singleton class** that maintains an in-memory cache of pricing data:
+
+```javascript
+class PricingService {
+    static cache = {
+        coefficients: new Map(),  // Vehicle type multipliers
+        extras: new Map(),        // Additional service prices
+        rates: []                 // Service rate tiers
+    };
+    
+    static isInitialized = false;
+    
+    static async initCache() {
+        if (this.isInitialized) return;
+        
+        const rawCoefficients = await pricingDAO.getVehicleCoefficients();
+        const rawRates = await pricingDAO.getServiceRates();
+        const rawAdditionalServices = await pricingDAO.getAdditionalServices();
+        
+        rawCoefficients.forEach(v => {
+            this.cache.coefficients.set(v.vehicle_type, parseFloat(v.multiplier));
+        });
+        
+        rawAdditionalServices.forEach(s => {
+            this.cache.extras.set(s.id_additional_service, parseFloat(s.price));
+        });
+        
+        this.cache.rates = rawRates;
+        this.isInitialized = true;
+    }
+}
+```
+
+**Why Singleton?**
+- Pricing data is static and rarely changes
+- Loading from database on every request would be inefficient
+- In-memory cache provides instant access for price calculations
+- Single initialization at server startup
+
+**Initialization** (`app.js:89`):  
+```javascript
+PricingService.initCache()
+  .then(() => {
+    console.log("Cache de precios inicializada correctamente");
+  })
+  .catch((err) => {
+    console.error("No se pudo cargar la cache de precio");
+    process.exit(1);
+  });
+```
+
+The cache is loaded **before** the server starts accepting requests, ensuring pricing data is always available.
+
+## Model Layer (DAO Pattern)
+
+PaparcApp uses the **Data Access Object (DAO)** pattern to separate database logic from business logic:
+
+### DAO Architecture
+
+```
+Controller → DAO → Database
+```
+
+**Benefits:**
+- Centralized database queries
+- Easy to test and mock
+- Database abstraction (could switch from PostgreSQL to MySQL)
+- Reusable data access methods
+
+### Available DAOs
+
+1. **customer-dao.js**: Customer CRUD operations and vehicle associations
+2. **vehicle-dao.js**: Vehicle management and lookups
+3. **reservation-dao.js**: Reservation lifecycle (create, update, cancel, finalize)
+4. **pricing-dao.js**: Load pricing tables (coefficients, rates, extras)
+5. **service-catalog-dao.js**: Service catalog queries (main services, additional services, plans)
+
+### Example DAO Implementation
+
+```javascript
+const db = require('../config/database');
+
+class PricingDAO {
+    async getVehicleCoefficients() {
+        const sql = 'SELECT * FROM vehicle_coefficient';
+        try {
+            const result = await db.query(sql);
+            return result.rows;
+        } catch (error) {
+            console.error('Error al obtener los coeficientes de vehiculos:', error);
+            throw new Error('Error al obtener los coeficientes de vehiculos', { cause: error });
+        }
+    }
+}
+
+module.exports = new PricingDAO();
+```
+
+**Pattern**: Each DAO is exported as a **singleton instance** (`new PricingDAO()`)
+
+## Database Connection
+
+### PostgreSQL Connection Pool
+
+```javascript
+const { Pool } = require('pg');
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false // Required for cloud databases
+    }
+});
+
+module.exports = {
+    query: (text, params) => pool.query(text, params),
+    pool: pool,
+    connect: () => pool.connect()
+};
+```
+
+**Connection Pool Benefits:**
+- Reuses database connections instead of opening/closing for each query
+- Reduces connection overhead
+- Handles concurrent requests efficiently
+- Automatic connection management
+
+**Configuration**: Cloud-ready with SSL support for hosted databases (Render.com, Neon, etc.)
+
+## Error Handling
+
+### 404 Handler
+
+```javascript
+app.use(function(req, res, next) {
+  next(createError(404));
+});
+```
+
+### Global Error Handler
+
+```javascript
+app.use(function(err, req, res, next) {
+  res.locals.message = err.message;
+  res.locals.error = req.app.get('env') === 'development' ? err : {};
+  
+  res.status(err.status || 500);
+  res.render('error');
+});
+```
+
+**Features:**
+- Catches all unhandled errors
+- Shows full error stack in development
+- Hides error details in production (security)
+- Renders custom error page
+
+## File Structure
+
+```
+proyecto/
+├── app.js                  # Express configuration & startup
+├── bin/
+│   └── www                 # Server startup script
+├── config/
+│   └── database.js         # PostgreSQL connection pool
+├── controllers/
+│   ├── mainController.js   # Public pages
+│   ├── authController.js   # Authentication
+│   ├── adminController.js  # Dashboard & management
+│   └── apiController.js    # API endpoints
+├── middlewares/
+│   └── auth.js             # Authentication middleware
+├── models/
+│   ├── customer-dao.js     # Customer data access
+│   ├── vehicle-dao.js      # Vehicle data access
+│   ├── reservation-dao.js  # Reservation data access
+│   ├── pricing-dao.js      # Pricing data access
+│   └── service-catalog-dao.js # Service catalog access
+├── routes/
+│   ├── index.js            # Public routes
+│   ├── users.js            # Auth routes
+│   ├── admin.js            # Admin routes
+│   └── api.js              # API routes
+├── services/
+│   └── pricingService.js   # Pricing calculation engine
+├── views/                  # EJS templates
+├── public/                 # Static assets
+│   ├── stylesheets/
+│   ├── javascripts/
+│   └── images/
+└── database/               # SQL schema files
+    ├── 01_tables.sql
+    ├── 02_constraints.sql
+    ├── 03_indexes.sql
+    └── 04_initial_data.sql
+```
+
+## Key Design Patterns
+
+### 1. MVC (Model-View-Controller)
+- **Model**: DAOs handle data access
+- **View**: EJS templates render HTML
+- **Controller**: Controllers handle request logic
+
+### 2. Singleton Pattern
+- **PricingService**: Single instance with in-memory cache
+- **DAOs**: Exported as single instances
+- **Database Pool**: Single pool for all connections
+
+### 3. Middleware Chain
+- Sequential request processing
+- Reusable cross-cutting concerns (logging, auth, parsing)
+
+### 4. Repository Pattern (DAO)
+- Abstracts database operations
+- Provides clean interface for data access
+
+## Summary
+
+PaparcApp is a well-structured Express.js application that leverages:
+- **MVC architecture** for clear separation of concerns
+- **Middleware pipeline** for request processing
+- **DAO pattern** for database abstraction
+- **Singleton services** for performance optimization
+- **Session-based authentication** with role-based access control
+- **Modular routing** for maintainable code organization
+
+The architecture supports both server-side rendering (EJS) and modern REST APIs for dynamic client-side interactions.

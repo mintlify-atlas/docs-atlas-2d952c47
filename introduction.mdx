@@ -1,0 +1,253 @@
+---
+title: Introduction to PaparcApp
+description: Complete airport parking management system with online reservations, admin dashboard, dynamic pricing, and automated notifications
+---
+
+# Introduction to PaparcApp
+
+PaparcApp is a full-stack web application designed for comprehensive airport parking management. Developed as a final degree project for the Web Application Development program, it provides an end-to-end solution for handling parking reservations, customer management, and operational workflows.
+
+<Note>
+  **Live Demo**: The application is deployed at [https://paparcapp-azby.onrender.com](https://paparcapp-azby.onrender.com)
+</Note>
+
+## What is PaparcApp?
+
+PaparcApp streamlines the entire parking lifecycle for airport parking facilities:
+
+- **Customer-facing booking system** with real-time price calculation
+- **Administrative dashboard** for managing entries, exits, and reservations
+- **Dynamic pricing engine** based on duration, vehicle type, and services
+- **Automated email notifications** for confirmations, check-ins, and invoicing
+- **Complete reservation lifecycle** from pending to in-progress to completed
+
+## Key Features
+
+### For Customers
+
+<CardGroup cols={2}>
+  <Card title="Multi-Step Booking" icon="calendar-check">
+    Intuitive reservation form with date selection, vehicle details, service choices, and real-time pricing
+  </Card>
+  <Card title="User Profile" icon="user">
+    Manage personal data, virtual garage of vehicles, active reservations, and booking history
+  </Card>
+  <Card title="Dual Authentication" icon="shield-halved">
+    Classic email/password login with bcrypt hashing plus social login via Google and Facebook
+  </Card>
+  <Card title="Guest Bookings" icon="ticket">
+    Walk-in customers can book without registration (NO-REGISTRADO type)
+  </Card>
+</CardGroup>
+
+### For Administrators
+
+<CardGroup cols={2}>
+  <Card title="Interactive Dashboard" icon="chart-line">
+    Calendar-based view with daily entries/exits, statistics, and color-coded reservation states
+  </Card>
+  <Card title="Reservation Management" icon="clipboard-check">
+    Complete lifecycle control: start stays, finalize with payment, cancel bookings, and manage photos
+  </Card>
+  <Card title="Photo Evidence System" icon="camera">
+    Mandatory minimum 5 photos before starting a stay, with gallery viewing and upload capabilities
+  </Card>
+  <Card title="Advanced Filtering" icon="filter">
+    Search reservations by status, date range, customer name, or license plate with pagination
+  </Card>
+</CardGroup>
+
+### Core Capabilities
+
+| Feature | Description |
+|---------|-------------|
+| **Dynamic Pricing** | Automatic calculation based on day ranges × vehicle coefficient + additional services |
+| **Three Service Tiers** | ECO (economical), TRANSFER (minibus), MEET (premium terminal service) |
+| **Vehicle Types** | Support for cars (×1.0), motorcycles (×0.5), vans (×1.25), caravans (×2.0), special (×1.5) |
+| **Additional Services** | Catalog of extras: car washes, ITV inspection, EV charging, refueling, maintenance |
+| **Subscription Plans** | Quarterly, semiannual, and annual contracts with discounts |
+| **Email Automation** | Confirmation, check-in, modification, and invoice emails via n8n webhooks |
+| **Responsive Design** | Mobile and desktop optimized with Bootstrap components |
+
+## Architecture Overview
+
+PaparcApp follows an **MVC (Model-View-Controller)** pattern with additional service layers:
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    CLIENTE (Browser)                 │
+│  EJS Templates · jQuery UI · SweetAlert2 · Firebase │
+└───────────────────────┬─────────────────────────────┘
+                        │ HTTP / HTTPS
+┌───────────────────────▼─────────────────────────────┐
+│                   EXPRESS.JS SERVER                  │
+│                                                     │
+│  ┌─────────┐  ┌────────────┐  ┌──────────────────┐  │
+│  │ Routes  │→ │ Middleware │→ │   Controllers    │  │
+│  │         │  │ (auth,     │  │ (main, auth,     │  │
+│  │ index   │  │  session,  │  │  admin, api)     │  │
+│  │ users   │  │  locals)   │  │                  │  │
+│  │ admin   │  │            │  │                  │  │
+│  │ api     │  │            │  │                  │  │
+│  └─────────┘  └────────────┘  └────────┬─────────┘  │
+│                                        │             │
+│  ┌──────────────────┐  ┌───────────────▼──────────┐  │
+│  │    Services      │  │     Models (DAOs)        │  │
+│  │ pricingService   │  │ customer-dao             │  │
+│  │ notificationSvc  │  │ reservation-dao          │  │
+│  │                  │  │ vehicle-dao              │  │
+│  │                  │  │ pricing-dao              │  │
+│  │                  │  │ service-catalog-dao      │  │
+│  └──────────────────┘  └───────────────┬──────────┘  │
+└────────────────────────────────────────┼─────────────┘
+                                         │ SQL (pg Pool)
+┌────────────────────────────────────────▼─────────────┐
+│              PostgreSQL (Neon.tech)                   │
+│  13 tablas · Constraints · Índices · Datos iniciales │
+└──────────────────────────────────────────────────────┘
+```
+
+## Technology Stack
+
+### Backend
+
+- **Node.js 18+** - JavaScript runtime environment
+- **Express 4.x** - Web framework for routing and middleware
+- **EJS** - Server-side template rendering
+- **PostgreSQL 16** - Relational database with 13 tables
+- **bcrypt** - Password hashing (10 salt rounds)
+- **express-session** - Secure session management
+- **pg (node-postgres)** - PostgreSQL driver with connection pooling
+
+### Frontend
+
+- **HTML5/CSS3** - Custom styling and structure
+- **JavaScript ES6+** - Client-side logic
+- **jQuery UI** - Datepicker for admin calendar
+- **SweetAlert2** - Interactive alerts and modals
+- **Firebase SDK** - Social authentication (Google/Facebook)
+- **Bootstrap Icons** - Iconography
+
+### Infrastructure
+
+- **Render** - Node.js server hosting and deployment
+- **Neon.tech** - Serverless PostgreSQL cloud hosting
+- **n8n** - Email automation workflow engine
+
+## Database Architecture
+
+The system uses **13 interconnected tables** organized in three layers:
+
+<AccordionGroup>
+  <Accordion title="Master Tables" icon="database">
+    - `customer` - System users (ADMIN, REGISTRADO, NO-REGISTRADO)
+    - `vehicle` - Registered vehicles with unique license plates
+    - `vehicle_coefficient` - Vehicle type multipliers (TURISMO, MOTO, FURGONETA, CARAVANA, ESPECIAL)
+    - `main_service` - Primary services (ECO, TRANSFER, MEET)
+    - `additional_service` - Extra services catalog
+    - `service_rate` - Pricing tiers by day ranges
+    - `contract_plan` - Subscription plans
+  </Accordion>
+  <Accordion title="Operational Tables" icon="gears">
+    - `reservation` - Bookings with complete lifecycle
+    - `contract` - Active customer subscriptions
+    - `photo_evidence` - Vehicle condition photos (minimum 5 required)
+    - `notification` - Email communication log
+  </Accordion>
+  <Accordion title="Relationship Tables" icon="link">
+    - `customer_vehicle` - N:M relationship (virtual garage)
+    - `reservation_additional_service` - N:M relationship (extras per booking)
+  </Accordion>
+</AccordionGroup>
+
+## Who Should Use PaparcApp?
+
+<CardGroup cols={3}>
+  <Card title="Airport Parking Operators" icon="plane-departure">
+    Manage daily operations with an integrated booking and check-in/check-out system
+  </Card>
+  <Card title="Parking Facility Managers" icon="building">
+    Track revenue, monitor occupancy, and analyze customer patterns
+  </Card>
+  <Card title="Developers & Students" icon="code">
+    Learn from a complete full-stack application with modern architecture patterns
+  </Card>
+</CardGroup>
+
+## Reservation Lifecycle
+
+Reservations follow a strict state machine with validation at each transition:
+
+<Steps>
+  <Step title="PENDIENTE (Pending)">
+    Reservation created by customer or admin. Can be edited or canceled.
+  </Step>
+  <Step title="EN CURSO (In Progress)">
+    Customer arrived, minimum 5 photos uploaded, parking spot assigned. Entry date locked.
+  </Step>
+  <Step title="FINALIZADA (Completed)">
+    Stay ended, payment method recorded, invoice email sent. Reservation archived.
+  </Step>
+</Steps>
+
+<Warning>
+  State transitions enforce business rules via CHECK constraints: parking spot required for IN PROGRESS/COMPLETED, payment mandatory before finalization, exit date must be after entry date.
+</Warning>
+
+## Pricing Formula
+
+The dynamic pricing engine uses an in-memory cached Singleton pattern:
+
+```
+Total Price = (daily_rate × days × vehicle_coefficient) + Σ additional_services
+```
+
+**Courtesy Period**: First 2 hours past a full day are not charged as an extra day.
+
+### Example Calculation
+
+<CodeGroup>
+```javascript Example: 7-day ECO with Car
+// 7 days with ECO service (4-10 day tier = €8/day)
+// Vehicle: TURISMO (×1.0)
+// No additional services
+
+Price = 8.00 × 7 × 1.0 + 0 = €56.00
+```
+
+```javascript Example: 5-day TRANSFER with Van + Wash
+// 5 days with TRANSFER (4-10 day tier = €11/day)
+// Vehicle: FURGONETA (×1.25)
+// Additional: Full Wash (€15.00)
+
+Price = 11.00 × 5 × 1.25 + 15.00 = €83.75
+```
+</CodeGroup>
+
+## Security Features
+
+- **Password Hashing**: bcrypt with 10 salt rounds
+- **Secure Sessions**: HTTP-only cookies with 1-hour expiration
+- **SQL Injection Prevention**: All queries use parameterized statements ($1, $2...)
+- **Server-Side Validation**: Price recalculation on backend to prevent client manipulation
+- **Role-Based Access**: Middleware guards for user/admin routes
+- **HTTPS in Production**: Trust proxy enabled for Render deployment
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get PaparcApp running locally in 5 minutes
+  </Card>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Detailed setup with prerequisites and database configuration
+  </Card>
+</CardGroup>
+
+---
+
+<Info>
+  **Development Team**: Javier Cabrera Miranda, Rafael Medina Quelle, Hamza Satori
+  
+  **License**: Open source for educational/research purposes. Commercial use reserved to authors.
+</Info>

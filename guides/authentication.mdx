@@ -1,0 +1,416 @@
+---
+title: 'Authentication'
+description: 'Complete guide to implementing authentication in PaparcApp with bcrypt, Firebase social login, and session management'
+icon: 'shield-check'
+---
+
+PaparcApp implements a hybrid authentication system supporting both classic email/password login with bcrypt encryption and social authentication through Firebase (Google and Facebook).
+
+## User Types
+
+The system supports three user roles defined in the database:
+
+| Role | Description | Access Level |
+|------|-------------|-------------|
+| `ADMIN` | Administrator with full system access | Dashboard, all reservations, user management |
+| `REGISTRADO` | Registered customer with account | Profile, reservations, vehicle management |
+| `NO-REGISTRADO` | Guest user (walk-in) | Limited, no login required |
+
+## Classic Authentication (Email/Password)
+
+### Password Hashing with bcrypt
+
+PaparcApp uses bcrypt with 10 salt rounds for secure password storage:
+
+```javascript controllers/authController.js
+// Registration - Hash password before storing
+const saltRounds = 10; // ~100ms processing time
+const password_hash = await bcrypt.hash(password, saltRounds);
+
+await customerDAO.createCustomer({
+    full_name: full_name,
+    email: email,
+    password_hash: password_hash
+});
+```
+
+### Login Flow
+
+The login process validates credentials and creates a session:
+
+```javascript controllers/authController.js
+login: async(req, res) => {
+    const { email, password, loginType } = req.body;
+    
+    // 1. Find user by email
+    const user = await customerDAO.getCustomerByEmail(email);
+    if (!user) {
+        return res.render('login', { 
+            error: 'Usuario no encontrado'
+        });
+    }
+    
+    // 2. Verify password with bcrypt
+    const passwordMatch = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatch) {
+        return res.render('login', { 
+            error: 'Contraseña incorrecta'
+        });
+    }
+    
+    // 3. Check role-based access (for worker login)
+    if (loginType === 'worker' && user.type !== 'ADMIN') {
+        return res.render('login', { 
+            error: 'Acceso denegado. No tienes permisos para acceder como empleado.'
+        });
+    }
+    
+    // 4. Create session
+    req.session.user = {
+        id: user.id_customer,
+        nombre: user.full_name,
+        email: user.email,
+        numero: user.phone,
+        role: user.type
+    };
+    
+    // 5. Redirect based on role
+    req.session.save(() => {
+        if (user.type === 'ADMIN') {
+            return res.redirect('/admin/dashboard');
+        } else {
+            return res.redirect('/users/profile');
+        }
+    });
+}
+```
+
+### Dual Login System
+
+PaparcApp supports separate login portals for customers and workers using a hidden `loginType` field:
+
+- **Customer Login**: Standard user authentication
+- **Worker Login**: Restricted to `ADMIN` role only
+
+This is controlled via the `loginType` parameter in the request body.
+
+## Firebase Social Authentication
+
+### Configuration
+
+Firebase is configured in the frontend with your project credentials:
+
+```javascript public/javascripts/firebase-config.js
+const firebaseConfig = {
+  apiKey: "AIzaSyD61OFtuypBCC8OuFEHN54VtVprJA00zTI",
+  authDomain: "paparcapp-b0ac1.firebaseapp.com",
+  projectId: "paparcapp-b0ac1",
+  storageBucket: "paparcapp-b0ac1.firebasestorage.app",
+  messagingSenderId: "363572926161",
+  appId: "1:363572926161:web:20bfb546fa6a1e38c797f0"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+```
+
+### Supported Providers
+
+#### Google Authentication
+
+```javascript public/javascripts/firebase-auth.js
+const googleProvider = new firebase.auth.GoogleAuthProvider();
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
+
+function loginWithGoogle() {
+  auth.signInWithPopup(googleProvider)
+    .then((result) => {
+      handleAuthSuccess(result, 'google');
+    })
+    .catch((error) => {
+      handleAuthError(error);
+    });
+}
+```
+
+#### Facebook Authentication
+
+```javascript public/javascripts/firebase-auth.js
+const facebookProvider = new firebase.auth.FacebookAuthProvider();
+facebookProvider.addScope('email');
+facebookProvider.addScope('public_profile');
+
+function loginWithFacebook() {
+  auth.signInWithPopup(facebookProvider)
+    .then((result) => {
+      handleAuthSuccess(result, 'facebook');
+    })
+    .catch((error) => {
+      handleAuthError(error);
+    });
+}
+```
+
+### Backend Integration
+
+When a user authenticates via Firebase, the frontend sends the token to the backend:
+
+```javascript controllers/authController.js
+socialLogin: async (req, res) => {
+    const { idToken, provider, uid, email, displayName, photoURL } = req.body;
+    
+    try {
+        // Check if user exists
+        let user = await customerDAO.getCustomerByEmail(email);
+        
+        if (!user) {
+            // Create new social user
+            const newUserId = await customerDAO.createCustomer({
+                full_name: displayName || 'Usuario ' + provider,
+                email: email,
+                password_hash: 'SOCIAL_LOGIN_' + provider.toUpperCase() + '_' + uid,
+                phone: null
+            });
+            
+            user = await customerDAO.getCustomerByEmail(email);
+        }
+        
+        // Create session
+        req.session.user = {
+            id: user.id_customer,
+            nombre: user.full_name,
+            email: user.email,
+            numero: user.phone,
+            role: user.type,
+            photoURL: photoURL,
+            socialProvider: provider
+        };
+        
+        req.session.save(() => {
+            res.json({
+                success: true,
+                redirectUrl: user.type === 'ADMIN' ? '/admin/dashboard' : '/users/profile'
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error en social login:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error al procesar el inicio de sesión social'
+        });
+    }
+}
+```
+
+<Note>
+Social login users get a special `password_hash` format: `SOCIAL_LOGIN_{PROVIDER}_{UID}` to prevent classic login attempts.
+</Note>
+
+## Session Management
+
+### Session Configuration
+
+Sessions are configured in `app.js` with express-session:
+
+```javascript app.js
+// Trust Render proxy for secure cookies
+app.set('trust proxy', 1);
+
+app.use(session({ 
+  secret: process.env.SESSION_SECRET || 'clave_secreta',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: 1000*60*60, // 1 hour
+    secure: process.env.NODE_ENV === 'production' // HTTPS only in production
+  } 
+}));
+```
+
+### Authentication Middleware
+
+PaparcApp provides three middleware functions for protecting routes:
+
+#### 1. Global Auth Locals Middleware
+
+Adds authentication state to all views:
+
+```javascript middlewares/auth.js
+const authLocalsMiddleware = (req, res, next) => {
+    if (req.session.user) {
+        res.locals.isLoggedIn = true;
+        res.locals.user = req.session.user;
+        res.locals.isAdmin = req.session.user.role === 'ADMIN';
+    } else {
+        res.locals.isLoggedIn = false;
+        res.locals.user = null;
+        res.locals.isAdmin = false;
+    }
+    next();
+};
+```
+
+#### 2. Require Login Middleware
+
+Protects routes that require authentication:
+
+```javascript middlewares/auth.js
+const isLoggedIn = (req, res, next) => {
+    if (req.session.user) {
+        next();
+    } else {
+        res.redirect('/users/login');
+    }
+};
+```
+
+#### 3. Admin-Only Middleware
+
+Restricts routes to admin users:
+
+```javascript middlewares/auth.js
+const isAdmin = (req, res, next) => {
+    if (req.session.user && req.session.user.role === 'ADMIN') {
+        next();
+    } else {
+        res.redirect('/');
+    }
+};
+```
+
+### Usage Example
+
+```javascript routes/users.js
+const { isLoggedIn, isAdmin } = require('../middlewares/auth');
+
+// Protected customer route
+router.get('/profile', isLoggedIn, authController.renderProfile);
+
+// Admin-only route
+router.get('/admin/dashboard', isAdmin, adminController.dashboard);
+```
+
+## Logout
+
+The logout process destroys the session and clears cookies:
+
+```javascript controllers/authController.js
+logout: (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            console.error('Error al cerrar sesión:', err);
+            return res.redirect('/users/profile');
+        }
+        
+        res.clearCookie('connect.sid');
+        res.redirect('/users/login?logout=true');
+    });
+}
+```
+
+## Password Management
+
+Users can update their password with proper validation:
+
+```javascript controllers/authController.js
+updatePassword: async (req, res) => {
+    const userId = req.session.user.id;
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    
+    // Validate new passwords match
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({ 
+            success: false, 
+            message: 'Las contraseñas nuevas no coinciden.' 
+        });
+    }
+    
+    // Get user and verify current password
+    const user = await customerDAO.getCustomerById(userId);
+    const passwordMatch = await bcrypt.compare(currentPassword, user.password_hash);
+    
+    if (!passwordMatch) {
+        return res.status(401).json({ 
+            success: false, 
+            message: 'La contraseña actual es incorrecta.' 
+        });
+    }
+    
+    // Hash and save new password
+    const saltRounds = 10;
+    const newHash = await bcrypt.hash(newPassword, saltRounds);
+    await customerDAO.updateCustomerPassword(userId, newHash);
+    
+    res.json({ success: true, message: 'Contraseña actualizada con éxito.' });
+}
+```
+
+## Environment Variables
+
+Required authentication environment variables:
+
+```bash .env
+# Session secret for cookie signing
+SESSION_SECRET=your-random-secret-key-here
+
+# Node environment (affects secure cookies)
+NODE_ENV=production
+```
+
+<Warning>
+Always use a strong, random `SESSION_SECRET` in production. Never commit this value to version control.
+</Warning>
+
+## Security Best Practices
+
+1. **Password Strength**: Bcrypt with 10 salt rounds provides strong protection
+2. **Secure Cookies**: Enabled in production with HTTPS
+3. **Session Timeout**: 1 hour maximum session duration
+4. **Role Validation**: Server-side checks prevent privilege escalation
+5. **Social Login Safety**: Unique password hash prevents duplicate auth methods
+6. **Proxy Trust**: Configured for Render deployment with `trust proxy`
+
+## Error Handling
+
+The system includes comprehensive error handling:
+
+```javascript public/javascripts/firebase-auth.js
+function handleAuthError(error) {
+    let errorMessage = 'Error signing in';
+    
+    switch (error.code) {
+        case 'auth/popup-closed-by-user':
+            errorMessage = 'Popup closed before completing sign in';
+            break;
+        case 'auth/popup-blocked':
+            errorMessage = 'Popup was blocked by the browser';
+            break;
+        case 'auth/account-exists-with-different-credential':
+            errorMessage = 'An account already exists with this email';
+            break;
+        case 'auth/network-request-failed':
+            errorMessage = 'Network error. Check your connection';
+            break;
+    }
+    
+    // Display error to user
+    Swal.fire({
+        icon: 'error',
+        title: 'Error',
+        text: errorMessage
+    });
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="/architecture/database-schema">
+    Learn about customer and session data models
+  </Card>
+  <Card title="Notifications" icon="bell" href="/guides/notifications">
+    Set up email notifications for user events
+  </Card>
+</CardGroup>

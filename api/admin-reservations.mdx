@@ -1,0 +1,226 @@
+---
+title: 'Get Reservations by Date'
+api: 'GET /api/reservations'
+---
+
+## Overview
+
+Retrieves all reservations for a specific date, separated into entries and exits. This endpoint is used by administrators to view daily parking operations.
+
+This endpoint requires **admin authentication**.
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Admin authentication token. Must be a valid session token with admin privileges.
+  
+  The `isAdmin` middleware validates the user's admin status before allowing access.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="date" type="string" default="today">
+  Date to filter reservations in ISO 8601 date format (e.g., `2026-03-10`).
+  
+  If not provided, defaults to the current date.
+</ParamField>
+
+## Response
+
+<ResponseField name="date" type="string">
+  The date used for filtering reservations (ISO 8601 format).
+</ResponseField>
+
+<ResponseField name="stats" type="object">
+  Summary statistics for the requested date.
+  
+  <ResponseField name="stats.total_entries" type="integer">
+    Total number of reservations with entry date matching the requested date.
+  </ResponseField>
+  
+  <ResponseField name="stats.total_exits" type="integer">
+    Total number of reservations with exit date matching the requested date.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="entries" type="array">
+  Array of reservation objects where the entry date matches the requested date.
+  
+  Each reservation object contains:
+  
+  <ResponseField name="entries[].id_reservation" type="integer">
+    Unique reservation ID.
+  </ResponseField>
+  
+  <ResponseField name="entries[].entry_date" type="string">
+    Entry date and time (ISO 8601 format).
+  </ResponseField>
+  
+  <ResponseField name="entries[].exit_date" type="string">
+    Exit date and time (ISO 8601 format, may be null).
+  </ResponseField>
+  
+  <ResponseField name="entries[].status" type="string">
+    Reservation status (e.g., `PENDIENTE`, `EN CURSO`, `FINALIZADA`, `CANCELADA`).
+  </ResponseField>
+  
+  <ResponseField name="entries[].license_plate" type="string">
+    Vehicle license plate number.
+  </ResponseField>
+  
+  <ResponseField name="entries[].brand" type="string">
+    Vehicle brand.
+  </ResponseField>
+  
+  <ResponseField name="entries[].color" type="string">
+    Vehicle color.
+  </ResponseField>
+  
+  <ResponseField name="entries[].customer_name" type="string">
+    Customer's full name.
+  </ResponseField>
+  
+  <ResponseField name="entries[].phone" type="string">
+    Customer's phone number.
+  </ResponseField>
+  
+  <ResponseField name="entries[].service_name" type="string">
+    Name of the main service.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="exits" type="array">
+  Array of reservation objects where the exit date matches the requested date.
+  
+  Structure is identical to the `entries` array.
+</ResponseField>
+
+## Date Matching Logic
+
+The endpoint performs the following logic:
+
+1. Queries all reservations where either:
+   - `entry_date` matches the requested date (date component only)
+   - OR `exit_date` matches the requested date (date component only)
+
+2. Separates results into two arrays:
+   - **Entries**: Reservations where entry date matches
+   - **Exits**: Reservations where exit date matches
+
+3. A single reservation can appear in both arrays if both entry and exit dates match the requested date (same-day reservations).
+
+## Error Codes
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Success - Returns reservations data |
+| 401 | Unauthorized - Missing or invalid authentication token |
+| 403 | Forbidden - User is not an admin |
+| 500 | Internal Server Error - Database query failed |
+
+## Examples
+
+### Request with Specific Date
+
+```bash
+curl -X GET "https://api.paparcapp.com/api/reservations?date=2026-03-10" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```
+
+### Request without Date (defaults to today)
+
+```bash
+curl -X GET "https://api.paparcapp.com/api/reservations" \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```
+
+### Success Response
+
+```json
+{
+  "date": "2026-03-10",
+  "stats": {
+    "total_entries": 5,
+    "total_exits": 3
+  },
+  "entries": [
+    {
+      "id_reservation": 101,
+      "entry_date": "2026-03-10T10:00:00.000Z",
+      "exit_date": "2026-03-15T10:00:00.000Z",
+      "status": "PENDIENTE",
+      "license_plate": "1234ABC",
+      "brand": "Toyota",
+      "color": "Rojo",
+      "customer_name": "Juan Pérez",
+      "phone": "+34612345678",
+      "service_name": "Parking Cubierto"
+    },
+    {
+      "id_reservation": 102,
+      "entry_date": "2026-03-10T14:30:00.000Z",
+      "exit_date": "2026-03-12T09:00:00.000Z",
+      "status": "EN CURSO",
+      "license_plate": "5678DEF",
+      "brand": "Honda",
+      "color": "Azul",
+      "customer_name": "María García",
+      "phone": "+34623456789",
+      "service_name": "Parking Descubierto"
+    }
+  ],
+  "exits": [
+    {
+      "id_reservation": 95,
+      "entry_date": "2026-03-05T08:00:00.000Z",
+      "exit_date": "2026-03-10T11:00:00.000Z",
+      "status": "FINALIZADA",
+      "license_plate": "9012GHI",
+      "brand": "Ford",
+      "color": "Negro",
+      "customer_name": "Carlos López",
+      "phone": "+34634567890",
+      "service_name": "Parking Premium"
+    }
+  ]
+}
+```
+
+### Error Response - Unauthorized
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+### Error Response - Forbidden (Not Admin)
+
+```json
+{
+  "error": "Forbidden - Admin access required"
+}
+```
+
+### Error Response - Server Error
+
+```json
+{
+  "error": "Error en el servidor, por favor intente más tarde."
+}
+```
+
+## Use Cases
+
+- **Daily Operations Dashboard**: View all vehicles entering or exiting on a specific day
+- **Reception Management**: Check expected arrivals for the current day
+- **Departure Planning**: Review scheduled departures to prepare vehicles
+- **Historical Analysis**: Query past dates to analyze parking patterns
+
+## Notes
+
+- **Date Format**: Dates are compared using only the date component (year-month-day), ignoring time.
+- **Null Exit Dates**: Some reservations may have `null` exit dates if the customer hasn't specified when they'll leave. These won't appear in the exits array.
+- **Timezone Handling**: The server uses `en-CA` locale for date formatting, which uses ISO 8601 format (YYYY-MM-DD).
+- **Same-Day Reservations**: If a reservation has both entry and exit on the requested date, it will appear in both the `entries` and `exits` arrays.
+- **Ordering**: Results are ordered by entry date in ascending order.

@@ -1,0 +1,714 @@
+---
+title: 'Pricing Engine'
+description: 'Dynamic pricing algorithm with vehicle coefficients, rate tiers, and calculation logic in PaparcApp'
+---
+
+## Overview
+
+PaparcApp implements a **dynamic pricing engine** that calculates reservation costs based on:
+
+1. **Service Type** (ECO, TRANSFER, MEET)
+2. **Stay Duration** (days with tiered pricing)
+3. **Vehicle Type** (coefficient multiplier)
+4. **Additional Services** (optional add-ons)
+
+The pricing system uses an **in-memory cache** for performance, loading pricing tables at server startup and calculating prices on-demand without database queries.
+
+## Pricing Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    SERVER STARTUP                           │
+│                                                             │
+│  app.js initializes PricingService                          │
+│         │                                                   │
+│         ▼                                                   │
+│  PricingService.initCache()                                 │
+│         │                                                   │
+│         ├──► Load vehicle_coefficient table                │
+│         ├──► Load service_rate table                       │
+│         └──► Load additional_service table                 │
+│                                                             │
+│         ▼                                                   │
+│  Cache stored in RAM (static properties)                   │
+│  - coefficients: Map<vehicle_type, multiplier>             │
+│  - rates: Array<{service_id, min_days, max_days, price}>   │
+│  - extras: Map<service_id, price>                          │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    RUNTIME (Per Request)                    │
+│                                                             │
+│  Client sends pricing request                               │
+│         │                                                   │
+│         ▼                                                   │
+│  POST /api/pricing/dynamic                                  │
+│  {                                                          │
+│    entry_date: "2026-03-10",                                │
+│    exit_date: "2026-03-15",                                 │
+│    vehicle_type: "TURISMO",                                 │
+│    id_main_service: 1,                                      │
+│    id_additional_services: [1, 8]                           │
+│  }                                                          │
+│         │                                                   │
+│         ▼                                                   │
+│  PricingService.calculateTotalPrice()                       │
+│         │                                                   │
+│         ├──► Calculate days (with 2-hour courtesy)         │
+│         ├──► Find matching rate tier from cache            │
+│         ├──► Get vehicle coefficient from cache            │
+│         ├──► Sum additional service prices from cache      │
+│         └──► Calculate: (rate × days × coefficient) + extras│
+│                                                             │
+│         ▼                                                   │
+│  Return total_price (rounded to 2 decimals)                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## PricingService Implementation
+
+### Singleton Pattern
+
+The PricingService is implemented as a **singleton** with static methods and properties:
+
+```javascript
+class PricingService {
+    // In-memory cache (singleton state)
+    static cache = {
+        coefficients: new Map(),  // vehicle_type → multiplier
+        extras: new Map(),        // service_id → price
+        rates: []                 // array of rate tier objects
+    };
+    
+    static isInitialized = false;
+    
+    // ... methods
+}
+
+module.exports = PricingService;
+```
+
+**Why Singleton?**
+- Pricing data is **static** and changes infrequently
+- Loading from database on every request is **inefficient**
+- Single cache instance shared across all requests
+- Initialized once at server startup
+
+### Cache Initialization
+
+Loaded during server startup in `app.js:89`:
+
+```javascript
+PricingService.initCache()
+  .then(() => {
+    console.log("Cache de precios inicializada correctamente");
+  })
+  .catch((err) => {
+    console.error("No se pudo cargar la cache de precio");
+    console.error(err);
+    process.exit(1); // Exit if pricing cache fails to load
+  });
+```
+
+**Critical**: If cache initialization fails, the server terminates (pricing is essential).
+
+### Cache Loading Logic
+
+```javascript
+static async initCache() {
+    if (this.isInitialized) return; // Prevent re-initialization
+
+    try {
+        console.log('Inicializando cache de precios ...');
+
+        // Load data from database via DAOs
+        const rawCoefficients = await pricingDAO.getVehicleCoefficients();
+        const rawRates = await pricingDAO.getServiceRates();
+        const rawAdditionalServices = await pricingDAO.getAdditionalServices();
+
+        // Populate coefficient Map
+        rawCoefficients.forEach(v => {
+            this.cache.coefficients.set(v.vehicle_type, parseFloat(v.multiplier));
+        });
+
+        // Populate additional services Map
+        rawAdditionalServices.forEach(s => {
+            this.cache.extras.set(s.id_additional_service, parseFloat(s.price));
+        });
+
+        // Store rates array (no transformation needed)
+        this.cache.rates = rawRates;
+
+        this.isInitialized = true;
+        console.log('Cache de precios cargada correctamente en la RAM');
+
+    } catch (error) {
+        console.error('Error al inicializar cache de precios:', error);
+        throw error;
+    }
+}
+```
+
+**Data Structures:**
+- **Map** for O(1) lookup (coefficients, extras)
+- **Array** for rate tiers (requires linear search with conditions)
+
+## Pricing Components
+
+### 1. Vehicle Coefficients
+
+Vehicle type determines the **base multiplier** for all prices:
+
+```sql
+SELECT * FROM vehicle_coefficient;
+```
+
+| vehicle_type | multiplier |
+|-------------|------------|
+| TURISMO | 1.00 |
+| MOTOCICLETA | 0.50 |
+| FURGONETA | 1.25 |
+| CARAVANA | 2.00 |
+| ESPECIAL | 1.50 |
+
+**Examples:**
+- **Motorcycle**: 50% discount (takes less space)
+- **Caravan**: 100% premium (takes double space)
+- **Van**: 25% premium (slightly larger)
+- **Special**: 50% premium (luxury/exotic cars)
+
+**In Cache:**
+```javascript
+this.cache.coefficients = Map {
+  'TURISMO' => 1.00,
+  'MOTOCICLETA' => 0.50,
+  'FURGONETA' => 1.25,
+  'CARAVANA' => 2.00,
+  'ESPECIAL' => 1.50
+}
+```
+
+### 2. Service Rate Tiers
+
+Pricing varies by **service type** and **stay duration** (days):
+
+```sql
+SELECT * FROM service_rate ORDER BY id_main_service, min_days;
+```
+
+#### ECO Service (id_main_service = 1)
+
+| min_days | max_days | daily_price |
+|---------|---------|-------------|
+| 1 | 3 | €12.00 |
+| 4 | 10 | €8.00 |
+| 11 | 15 | €6.00 |
+| 16 | 9999 | €5.00 |
+
+#### TRANSFER Service (id_main_service = 2)
+
+| min_days | max_days | daily_price |
+|---------|---------|-------------|
+| 1 | 3 | €15.00 |
+| 4 | 10 | €11.00 |
+| 11 | 15 | €9.00 |
+| 16 | 9999 | €8.00 |
+
+#### MEET Service (id_main_service = 3)
+
+| min_days | max_days | daily_price |
+|---------|---------|-------------|
+| 1 | 3 | €18.00 |
+| 4 | 10 | €14.00 |
+| 11 | 15 | €12.00 |
+| 16 | 9999 | €11.00 |
+
+**Pricing Strategy:**
+- Longer stays get **discounted daily rates**
+- MEET is the **premium service** (highest prices)
+- ECO is the **budget option** (lowest prices)
+- Discount increases with stay duration (encourages longer bookings)
+
+**In Cache:**
+```javascript
+this.cache.rates = [
+  { id_rate: 1, id_main_service: 1, min_days: 1, max_days: 3, daily_price: 12.00 },
+  { id_rate: 2, id_main_service: 1, min_days: 4, max_days: 10, daily_price: 8.00 },
+  // ... all 12 rate tiers
+]
+```
+
+### 3. Additional Services
+
+Optional add-ons with **fixed prices** (not affected by vehicle type or duration):
+
+```sql
+SELECT id_additional_service, name, price FROM additional_service;
+```
+
+| id | name | category | price |
+|---|------|----------|-------|
+| 1 | Basic Wash | CLEANING | €15.00 |
+| 2 | Interior Cleaning | CLEANING | €25.00 |
+| 3 | Full Wash | CLEANING | €50.00 |
+| 4 | Pro Detailing | CLEANING | €100.00 |
+| 5 | Refueling | MANAGEMENT | €15.00 |
+| 6 | MOT Service | MANAGEMENT | €60.00 |
+| 7 | Quick Maintenance | MAINTENANCE | €30.00 |
+| 8 | EV Charging | ENERGY | €25.00 |
+
+**In Cache:**
+```javascript
+this.cache.extras = Map {
+  1 => 15.00,
+  2 => 25.00,
+  3 => 50.00,
+  4 => 100.00,
+  5 => 15.00,
+  6 => 60.00,
+  7 => 30.00,
+  8 => 25.00
+}
+```
+
+## Price Calculation Algorithm
+
+### Main Calculation Function
+
+```javascript
+static calculateTotalPrice(
+    entry_date, 
+    exit_date, 
+    vehicle_type, 
+    id_main_service, 
+    id_additional_services = []
+) {
+    if (!this.isInitialized) {
+        throw new Error('Cache de precios no inicializada en la RAM');
+    }
+
+    // Step 1: Calculate stay duration in days
+    const start = new Date(entry_date);
+    const end = new Date(exit_date);
+    const diffTime = Math.abs(end - start);
+    const msPerday = 1000 * 60 * 60 * 24;
+    const courtesyTime = 2 * 60 * 60 * 1000; // 2 hours grace period
+
+    let calculatedDays = Math.floor(diffTime / msPerday);
+    if (diffTime % msPerday > courtesyTime) {
+        calculatedDays += 1; // Charge extra day if over 2-hour grace
+    }
+
+    const totalDays = calculatedDays > 0 ? calculatedDays : 1; // Minimum 1 day
+
+    // Step 2: Find matching rate tier
+    const baseRate = this.cache.rates.find(r => 
+        r.id_main_service === id_main_service &&
+        r.min_days <= totalDays &&
+        r.max_days >= totalDays
+    );
+
+    if (!baseRate) {
+        throw new Error(`No se encontró una tarifa base para el servicio ${id_main_service} y ${totalDays} días`);
+    }
+
+    // Step 3: Get vehicle coefficient
+    const vehicleCoefficient = this.cache.coefficients.get(vehicle_type);
+
+    if (vehicleCoefficient === undefined) {
+        throw new Error(`No se encontró un coeficiente para el tipo de vehículo ${vehicle_type}`);
+    }
+
+    // Step 4: Calculate additional services total
+    let extrasTotal = 0;
+    for (const extraId of id_additional_services) {
+        const extraPrice = this.cache.extras.get(extraId);
+        if (extraPrice === undefined) {
+            console.warn(`No se encontró un precio para el servicio adicional con id ${extraId}, se omitirá en el cálculo del precio total`);
+        } else {
+            extrasTotal += extraPrice;
+        }
+    }
+
+    // Step 5: Calculate total price
+    const totalPrice = (baseRate.daily_price * totalDays * vehicleCoefficient) + extrasTotal;
+    
+    return Math.round(totalPrice * 100) / 100; // Round to 2 decimals
+}
+```
+
+### Calculation Breakdown
+
+**Formula:**
+```
+Total Price = (Daily Rate × Days × Vehicle Coefficient) + Additional Services
+```
+
+**Step-by-Step:**
+
+1. **Calculate Days**
+   - Convert entry/exit dates to Date objects
+   - Calculate time difference in milliseconds
+   - Convert to days (rounding down)
+   - Add 1 day if remainder exceeds 2-hour grace period
+   - Ensure minimum of 1 day
+
+2. **Find Rate Tier**
+   - Search `cache.rates` array for matching:
+     - `id_main_service` (ECO=1, TRANSFER=2, MEET=3)
+     - `min_days <= totalDays <= max_days`
+   - Throw error if no match found
+
+3. **Get Vehicle Coefficient**
+   - Lookup in `cache.coefficients` Map
+   - Throw error if vehicle type not found
+
+4. **Sum Additional Services**
+   - Loop through `id_additional_services` array
+   - Lookup each in `cache.extras` Map
+   - Sum all prices (skip if ID not found, with warning)
+
+5. **Calculate Total**
+   - Base cost: `daily_price × totalDays × vehicleCoefficient`
+   - Add extras: `basePrice + extrasTotal`
+   - Round to 2 decimal places
+
+### Courtesy Time Feature
+
+```javascript
+const courtesyTime = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+
+let calculatedDays = Math.floor(diffTime / msPerday);
+if (diffTime % msPerday > courtesyTime) {
+    calculatedDays += 1;
+}
+```
+
+**Purpose:** Don't charge extra day for minor overages
+
+**Examples:**
+- Entry: 10:00, Exit: 10:00 (exactly 24h) → 1 day
+- Entry: 10:00, Exit: 11:00 (25h) → 1 day (within 2h grace)
+- Entry: 10:00, Exit: 13:00 (27h) → 2 days (exceeds grace period)
+- Entry: 10:00, Exit: 08:00 next day (22h) → 1 day
+
+## Pricing Examples
+
+### Example 1: Basic Reservation
+
+**Scenario:**
+- Service: ECO (id=1)
+- Vehicle: TURISMO (coefficient=1.00)
+- Duration: 5 days
+- Additional Services: None
+
+**Calculation:**
+```javascript
+// 5 days falls in tier: 4-10 days = €8/day
+baseRate = 8.00
+vehicleCoefficient = 1.00
+totalDays = 5
+extrasTotal = 0
+
+totalPrice = (8.00 × 5 × 1.00) + 0 = €40.00
+```
+
+### Example 2: Motorcycle with Add-ons
+
+**Scenario:**
+- Service: TRANSFER (id=2)
+- Vehicle: MOTOCICLETA (coefficient=0.50)
+- Duration: 2 days
+- Additional Services: Basic Wash (€15)
+
+**Calculation:**
+```javascript
+// 2 days falls in tier: 1-3 days = €15/day
+baseRate = 15.00
+vehicleCoefficient = 0.50
+totalDays = 2
+extrasTotal = 15.00
+
+totalPrice = (15.00 × 2 × 0.50) + 15.00 = 15.00 + 15.00 = €30.00
+```
+
+### Example 3: Long Stay Caravan
+
+**Scenario:**
+- Service: MEET (id=3)
+- Vehicle: CARAVANA (coefficient=2.00)
+- Duration: 12 days
+- Additional Services: Full Wash (€50), Refueling (€15)
+
+**Calculation:**
+```javascript
+// 12 days falls in tier: 11-15 days = €12/day
+baseRate = 12.00
+vehicleCoefficient = 2.00
+totalDays = 12
+extrasTotal = 50.00 + 15.00 = 65.00
+
+totalPrice = (12.00 × 12 × 2.00) + 65.00 = 288.00 + 65.00 = €353.00
+```
+
+### Example 4: Edge Case - Short Stay
+
+**Scenario:**
+- Entry: 2026-03-10 14:00
+- Exit: 2026-03-10 20:00 (same day, 6 hours later)
+- Service: ECO (id=1)
+- Vehicle: TURISMO (coefficient=1.00)
+
+**Calculation:**
+```javascript
+diffTime = 6 hours = 6 * 60 * 60 * 1000 = 21,600,000 ms
+calculatedDays = Math.floor(21600000 / 86400000) = 0
+totalDays = 0 > 0 ? 0 : 1 = 1 // Minimum 1 day enforced
+
+// 1 day falls in tier: 1-3 days = €12/day
+totalPrice = (12.00 × 1 × 1.00) + 0 = €12.00
+```
+
+**Minimum charge**: Always at least 1 day, even for same-day returns.
+
+## API Endpoint
+
+### POST /api/pricing/dynamic
+
+**Purpose:** Calculate price for a potential reservation (used by booking form)
+
+**Request:**
+```javascript
+POST /api/pricing/dynamic
+Content-Type: application/json
+
+{
+  "entry_date": "2026-03-10T10:00:00",
+  "exit_date": "2026-03-15T10:00:00",
+  "vehicle_type": "TURISMO",
+  "id_main_service": 1,
+  "id_additional_services": [1, 8]
+}
+```
+
+**Response:**
+```javascript
+{
+  "success": true,
+  "total_price": 85.00,
+  "details": {
+    "days": 5,
+    "daily_rate": 8.00,
+    "base_price": 40.00,
+    "extras_price": 40.00,
+    "vehicle_coefficient": 1.00
+  }
+}
+```
+
+**Controller Implementation:**
+```javascript
+calculatePriceDynamic: async (req, res) => {
+    try {
+        const { entry_date, exit_date, vehicle_type, id_main_service, id_additional_services } = req.body;
+        
+        const totalPrice = PricingService.calculateTotalPrice(
+            entry_date,
+            exit_date,
+            vehicle_type,
+            id_main_service,
+            id_additional_services || []
+        );
+        
+        res.json({ success: true, total_price: totalPrice });
+    } catch (error) {
+        console.error('Error calculating price:', error);
+        res.status(400).json({ success: false, error: error.message });
+    }
+}
+```
+
+## Data Access Layer (DAO)
+
+### PricingDAO Methods
+
+**Location:** `models/pricing-dao.js`
+
+```javascript
+class PricingDAO {
+    async getVehicleCoefficients() {
+        const sql = 'SELECT * FROM vehicle_coefficient';
+        try {
+            const result = await db.query(sql);
+            return result.rows;
+        } catch (error) {
+            console.error('Error al obtener los coeficientes de vehiculos:', error);
+            throw new Error('Error al obtener los coeficientes de vehiculos', { cause: error });
+        }
+    }
+
+    async getServiceRates() {
+        const sql = 'SELECT * FROM service_rate ORDER BY id_main_service, min_days ASC';
+        try {
+            const result = await db.query(sql);
+            return result.rows;
+        } catch (error) {
+            console.error('Error al obtener las tarifas de servicios:', error);
+            throw new Error('Error al obtener las tarifas de servicios', { cause: error });
+        }
+    }
+
+    async getAdditionalServices() {
+        const sql = 'SELECT id_additional_service, price FROM additional_service';
+        try {
+            const result = await db.query(sql);
+            return result.rows;
+        } catch (error) {
+            console.error('Error al obtener los servicios adicionales:', error);
+            throw new Error('Error al obtener los servicios adicionales', { cause: error });
+        }
+    }
+}
+
+module.exports = new PricingDAO();
+```
+
+**Design Notes:**
+- Each method handles its own error logging
+- Results returned as raw database rows
+- DAO exported as singleton instance
+- Ordered query for service_rates (sorted by service and days for efficient searching)
+
+## Performance Optimizations
+
+### 1. In-Memory Cache
+- **No database queries** during price calculations
+- **O(1) lookups** for coefficients and extras (Map)
+- **O(n) search** for rate tiers (small array, ~12 items)
+
+### 2. Singleton Pattern
+- Single cache instance shared across requests
+- Initialized once at startup
+- No repeated data loading
+
+### 3. Data Structures
+- **Map** for key-value lookups (coefficients, extras)
+- **Array** for rate tiers (needs conditional matching)
+
+### 4. Lazy Evaluation
+- Additional services calculated only if provided
+- Early validation (cache initialized check)
+
+## Error Handling
+
+### Cache Not Initialized
+```javascript
+if (!this.isInitialized) {
+    throw new Error('Cache de precios no inicializada en la RAM');
+}
+```
+
+### Rate Tier Not Found
+```javascript
+if (!baseRate) {
+    throw new Error(`No se encontró una tarifa base para el servicio ${id_main_service} y ${totalDays} días`);
+}
+```
+
+### Vehicle Coefficient Missing
+```javascript
+if (vehicleCoefficient === undefined) {
+    throw new Error(`No se encontró un coeficiente para el tipo de vehículo ${vehicle_type}`);
+}
+```
+
+### Additional Service Not Found
+```javascript
+if (extraPrice === undefined) {
+    console.warn(`No se encontró un precio para el servicio adicional con id ${extraId}, se omitirá en el cálculo del precio total`);
+    // Continues without throwing (graceful degradation)
+}
+```
+
+**Strategy:**
+- **Critical errors** (no rate, no coefficient) throw exceptions
+- **Non-critical errors** (missing extra) log warnings and continue
+- All errors include descriptive messages with context
+
+## Testing Considerations
+
+### Unit Test Examples
+
+```javascript
+// Test: Basic calculation
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10', '2026-03-15', 'TURISMO', 1, []),
+    40.00
+);
+
+// Test: Motorcycle discount
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10', '2026-03-12', 'MOTOCICLETA', 2, []),
+    15.00
+);
+
+// Test: Additional services
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10', '2026-03-13', 'TURISMO', 1, [1, 8]),
+    76.00 // (12 × 3 × 1.00) + 15 + 25
+);
+
+// Test: Minimum 1 day
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10 10:00', '2026-03-10 14:00', 'TURISMO', 1, []),
+    12.00
+);
+
+// Test: Courtesy time (should charge 1 day)
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10 10:00', '2026-03-11 11:00', 'TURISMO', 1, []),
+    12.00
+);
+
+// Test: Beyond courtesy time (should charge 2 days)
+assert.equal(
+    PricingService.calculateTotalPrice('2026-03-10 10:00', '2026-03-11 13:00', 'TURISMO', 1, []),
+    24.00
+);
+```
+
+### Integration Test
+
+```javascript
+// Test: Full API request
+const response = await fetch('/api/pricing/dynamic', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        entry_date: '2026-03-10',
+        exit_date: '2026-03-15',
+        vehicle_type: 'TURISMO',
+        id_main_service: 1,
+        id_additional_services: [1, 8]
+    })
+});
+
+const data = await response.json();
+assert.equal(data.success, true);
+assert.equal(data.total_price, 80.00);
+```
+
+## Summary
+
+The PaparcApp pricing engine is:
+
+- **Fast**: In-memory cache with O(1) lookups
+- **Flexible**: Tiered pricing based on duration
+- **Fair**: 2-hour courtesy period for minor overages
+- **Transparent**: Clear calculation formula
+- **Maintainable**: Centralized pricing logic in singleton service
+- **Reliable**: Comprehensive error handling and validation
+- **Scalable**: No database queries during calculations
+
+The system balances **business needs** (dynamic pricing, promotions) with **technical requirements** (performance, maintainability) through careful caching and algorithm design.

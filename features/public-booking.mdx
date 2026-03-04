@@ -1,0 +1,375 @@
+---
+title: 'Public Booking Flow'
+description: 'Multi-step booking interface for customers to reserve parking spots with real-time pricing'
+icon: 'calendar-check'
+---
+
+## Overview
+
+The public booking flow is a **3-step funnel** designed for non-technical users to quickly reserve a parking spot. It features real-time dynamic pricing, vehicle type detection, and optional additional services.
+
+<Info>
+  **Location**: `/booking` route  
+  **View**: `views/booking.ejs`  
+  **Controller**: `controllers/mainController.js:renderBooking()`  
+  **Client Logic**: `public/javascripts/public-booking.js`
+</Info>
+
+---
+
+## Workflow: 3-Step Funnel
+
+### Step 1: Dates & Service Selection
+
+Customers start by selecting their parking dates and desired service tier.
+
+<Steps>
+  <Step title="Select Entry/Exit Dates">
+    - **Entry Date**: `datetime-local` input (e.g., "2024-03-15 09:00")
+    - **Exit Date**: `datetime-local` input (e.g., "2024-03-20 18:00")
+    - Dates can be pre-filled via URL params: `/booking?entrada=2024-03-15T09:00&salida=2024-03-20T18:00`
+  </Step>
+  
+  <Step title="Choose Main Service">
+    Options fetched from `service_catalog_dao.getMainServices(true)` (only active services):
+    - **Basic Parking**: Outdoor, self-park
+    - **Premium Parking**: Covered, valet service
+    - **VIP Experience**: Climate-controlled, car wash included
+  </Step>
+  
+  <Step title="Add Optional Extras">
+    Checkbox grid for additional services (from `additional_service` table):
+    - Car wash (+€15)
+    - Tire pressure check (+€5)
+    - Fuel refill (+€10)
+    - Interior cleaning (+€20)
+  </Step>
+  
+  <Step title="Real-Time Price Calculation">
+    Price updates automatically on any change via `updateDynamicPrice()`:  
+    **POST** `/api/pricing/dynamic`
+    
+    ```json
+    {
+      "entry_date": "2024-03-15T09:00",
+      "exit_date": "2024-03-20T18:00",
+      "vehicle_type": "TURISMO",
+      "id_main_service": 1,
+      "additional_services": [2, 5]
+    }
+    ```
+    
+    Response includes total price calculated by `pricingService.calculateTotalPrice()`
+  </Step>
+</Steps>
+
+**Validation**: 
+- Entry date < Exit date (enforced client-side and server-side)
+- Service selection is required
+- If no service selected, uses cheapest service for estimation
+
+---
+
+### Step 2: Vehicle & Customer Details
+
+Collect customer information and vehicle details for reservation.
+
+<AccordionGroup>
+  <Accordion title="Customer Information">
+    - **Full Name**: Required (pre-filled if logged in: `user.nombre`)
+    - **Phone**: Required (pre-filled: `user.numero`)
+    - **Email**: Optional (pre-filled: `user.email`)
+    
+    Data stored in `customer` table. Phone used as unique identifier for walk-in customers.
+  </Accordion>
+  
+  <Accordion title="Vehicle Registration">
+    - **License Plate**: Required, auto-uppercase (e.g., "0000XXX")
+    - **Vehicle Type**: Dropdown (TURISMO, FURGONETA, MOTOCICLETA, etc.)
+    - **Brand**: Optional (e.g., "Toyota")
+    - **Model**: Optional (e.g., "Corolla")
+    - **Color**: Optional
+    
+    If user is logged in and has vehicles, first vehicle auto-fills from `customer_dao.getVehiclesByCustomerId()`
+  </Accordion>
+</AccordionGroup>
+
+**Auto-fill Logic** (authController.js:90-110):
+```javascript
+if (req.session.user && req.session.user.id) {
+    const vehicles = await customerDAO.getVehiclesByCustomerId(req.session.user.id);
+    if (vehicles && vehicles.length > 0) {
+        userVehicle = vehicles[0]; // First registered vehicle
+    }
+}
+```
+
+---
+
+### Step 3: Confirmation & Submission
+
+Final review before creating the reservation.
+
+<CardGroup cols={2}>
+  <Card title="Summary Display" icon="clipboard-check">
+    Shows all collected data:
+    - Entry/Exit dates (formatted)
+    - Customer name & phone
+    - License plate (uppercase)
+    - Vehicle description
+    - Final calculated price
+  </Card>
+  
+  <Card title="Submission Handler" icon="paper-plane">
+    **POST** `/api/reservations/public`
+    
+    Creates reservation via `reservationDAO.createReservationTransaction()`:
+    1. Find or create customer by phone
+    2. Find or create vehicle by license plate
+    3. Link customer to vehicle
+    4. Create reservation with status `PENDIENTE`
+    5. Insert additional services
+  </Card>
+</CardGroup>
+
+**Success Response**:
+```json
+{
+  "success": true,
+  "message": "Booking confirmed",
+  "data": {
+    "id_reservation": 42,
+    "customer_name": "John Doe",
+    "license_plate": "1234ABC",
+    "entry_date": "15/3/2024, 9:00:00",
+    "total_price": 125.50
+  }
+}
+```
+
+A success screen shows the booking ID and allows return to home.
+
+---
+
+## Price Calculation Engine
+
+### Dynamic Pricing Algorithm
+
+Implemented in `services/pricingService.js:82-139`:
+
+<Steps>
+  <Step title="Calculate Stay Duration">
+    ```javascript
+    const diffTime = Math.abs(exitDate - entryDate);
+    const calculatedDays = Math.floor(diffTime / msPerDay);
+    const courtesyTime = 2 * 60 * 60 * 1000; // 2-hour grace period
+    
+    if (diffTime % msPerDay > courtesyTime) {
+        calculatedDays += 1;
+    }
+    const totalDays = calculatedDays > 0 ? calculatedDays : 1; // Min 1 day
+    ```
+  </Step>
+  
+  <Step title="Lookup Base Rate">
+    Find matching rate from `service_rate` table:
+    ```sql
+    SELECT daily_price FROM service_rate
+    WHERE id_main_service = ? 
+      AND min_days <= ? 
+      AND max_days >= ?
+    ```
+    
+    Example rates:
+    - 1-3 days: €15/day
+    - 4-7 days: €12/day
+    - 8-15 days: €10/day
+  </Step>
+  
+  <Step title="Apply Vehicle Multiplier">
+    From `vehicle_type_coefficient` table:
+    - TURISMO: 1.0x
+    - FURGONETA: 1.5x
+    - MOTOCICLETA: 0.8x
+    - CAMION: 2.0x
+  </Step>
+  
+  <Step title="Add Extras">
+    Sum fixed prices from `additional_service` table
+  </Step>
+  
+  <Step title="Calculate Final Price">
+    ```javascript
+    const totalPrice = (baseRate.daily_price * totalDays * vehicleCoefficient) + extrasTotal;
+    return Math.round(totalPrice * 100) / 100; // 2 decimals
+    ```
+  </Step>
+</Steps>
+
+### Pricing Cache
+
+<Note>
+  All pricing data is **cached in RAM** on server startup via `PricingService.initCache()` to avoid repeated database queries. Cache includes:
+  - Vehicle type coefficients (Map)
+  - Service rates (Array)
+  - Additional service prices (Map)
+</Note>
+
+---
+
+## User Experience Features
+
+<CardGroup cols={2}>
+  <Card title="URL Pre-population" icon="link">
+    Users can arrive from `/` with dates already selected:
+    ```
+    /booking?entrada=2024-03-15T09:00&salida=2024-03-20T18:00
+    ```
+    Dates auto-fill in Step 1
+  </Card>
+  
+  <Card title="Logged-in User Benefits" icon="user-check">
+    - Auto-fill name, email, phone
+    - First registered vehicle pre-selected
+    - Faster checkout experience
+  </Card>
+  
+  <Card title="Visual Validation" icon="exclamation-triangle">
+    Red borders (`.is-invalid`) on empty required fields when advancing steps
+  </Card>
+  
+  <Card title="Loading States" icon="spinner">
+    Spinner displays during price calculation API calls
+  </Card>
+</CardGroup>
+
+---
+
+## Technical Implementation
+
+### Frontend Flow Control
+
+**Step Navigation** (`public-booking.js:126-176`):
+```javascript
+function goToStep(step) {
+    let errores = false;
+    
+    if (step === 2) {
+        // Validate dates and service
+        if (!entry.value) { mostrarError(entry); errores = true; }
+        if (!exit.value) { mostrarError(exit); errores = true; }
+        if (!service.value) { mostrarError(service); errores = true; }
+    }
+    
+    if (step === 3) {
+        // Validate customer & vehicle
+        if (!name.value) { mostrarError(name); errores = true; }
+        if (!phone.value) { mostrarError(phone); errores = true; }
+        if (!plate.value) { mostrarError(plate); errores = true; }
+    }
+    
+    if (errores) return;
+    
+    // Show/hide step panels
+    document.querySelectorAll('.booking-body').forEach(b => b.style.display = 'none');
+    document.querySelector(`#booking-step-${step}`).style.display = 'block';
+}
+```
+
+### Backend Transaction Safety
+
+**Atomic Reservation Creation** (`models/reservation-dao.js:239-354`):
+```javascript
+async createReservationTransaction(customerData, vehicleData, reservationData) {
+    const client = await db.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        // 1. Find or create customer by phone
+        let customerId = await findOrCreateCustomer(customerData);
+        
+        // 2. Find or create vehicle by license plate
+        let vehicleId = await findOrCreateVehicle(vehicleData);
+        
+        // 3. Link customer <-> vehicle (if not exists)
+        await linkCustomerVehicle(customerId, vehicleId);
+        
+        // 4. Create reservation (status = PENDIENTE)
+        const reservationId = await insertReservation(...);
+        
+        // 5. Insert additional services
+        await insertAdditionalServices(reservationId, additionalServices);
+        
+        await client.query('COMMIT');
+        return reservationId;
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+```
+
+<Warning>
+  **ROLLBACK on failure**: If any step fails (e.g., duplicate vehicle constraint), the entire transaction is rolled back—no partial data is saved.
+</Warning>
+
+---
+
+## Code References
+
+| Component | File Path | Key Functions |
+|-----------|-----------|---------------|
+| **Main Controller** | `controllers/mainController.js` | `renderBooking()` (line 89-127) |
+| **Public API** | `routes/api.js` | `/api/reservations/public` endpoint |
+| **Reservation DAO** | `models/reservation-dao.js` | `createReservationTransaction()` (line 239-354) |
+| **Pricing Service** | `services/pricingService.js` | `calculateTotalPrice()` (line 82-139) |
+| **Client Logic** | `public/javascripts/public-booking.js` | `goToStep()`, `updateDynamicPrice()` |
+| **View Template** | `views/booking.ejs` | 3-step form structure |
+
+---
+
+## Error Handling
+
+<CodeGroup>
+```javascript Client Validation
+// Date logic check
+if (new Date(entry.value) >= new Date(exit.value)) {
+    Swal.fire({
+        icon: 'error',
+        title: 'Invalid Dates',
+        text: 'Exit date must be after entry date.'
+    });
+    return;
+}
+```
+
+```javascript Server Validation
+// Vehicle type mismatch check (adminController.js:260-264)
+const existingVehicle = await vehicleDAO.getVehicleByLicensePlate(license_plate);
+
+if (existingVehicle && existingVehicle.type !== vehicle_type) {
+    return res.status(400).json({
+        success: false,
+        message: `License plate already registered for type ${existingVehicle.type}`
+    });
+}
+```
+</CodeGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="User Profile" icon="user" href="/features/user-profile">
+    Manage reservations after booking
+  </Card>
+  
+  <Card title="Admin Dashboard" icon="gauge" href="/features/admin-dashboard">
+    How staff processes bookings
+  </Card>
+</CardGroup>

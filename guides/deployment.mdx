@@ -1,0 +1,541 @@
+---
+title: 'Deployment'
+description: 'Deploy PaparcApp to production using Render and Neon PostgreSQL with complete environment configuration'
+icon: 'rocket'
+---
+
+This guide walks you through deploying PaparcApp to production using Render for hosting and Neon for PostgreSQL database management.
+
+## Prerequisites
+
+Before deploying, ensure you have:
+
+- [ ] GitHub repository with your PaparcApp code
+- [ ] [Render](https://render.com) account (free tier available)
+- [ ] [Neon](https://neon.tech) account for PostgreSQL (free tier available)
+- [ ] n8n instance configured (see [Notifications Guide](/guides/notifications))
+- [ ] Firebase project set up (for social authentication)
+
+## Architecture Overview
+
+Production deployment stack:
+
+```mermaid
+graph TB
+    A[Users] -->|HTTPS| B[Render Web Service]
+    B -->|SSL/TLS| C[Neon PostgreSQL]
+    B -->|Webhooks| D[n8n Cloud]
+    D -->|SMTP| E[Email Service]
+    B -->|OAuth| F[Firebase Auth]
+```
+
+## Step 1: Database Setup (Neon)
+
+### Create Neon Project
+
+1. Sign up at [neon.tech](https://neon.tech)
+2. Click **"New Project"**
+3. Configure your database:
+   - **Name**: `paparcapp-production`
+   - **Region**: Choose closest to your users (e.g., `US East`, `EU West`)
+   - **PostgreSQL Version**: `15` or latest
+4. Click **"Create Project"**
+
+### Get Connection String
+
+Neon provides a connection string in this format:
+
+```
+postgresql://user:password@ep-xxx-xxx-xxx.region.aws.neon.tech/paparcapp_db?sslmode=require
+```
+
+**Copy this entire string** - you'll need it for Render.
+
+### Initialize Database Schema
+
+1. Open the **SQL Editor** in Neon console
+2. Run the SQL scripts in order:
+
+```sql
+-- 1. Create tables (from database/01_tables.sql)
+CREATE TABLE customer (
+    id_customer SERIAL PRIMARY KEY,
+    full_name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    type VARCHAR(20) DEFAULT 'REGISTRADO',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Continue with all tables from 01_tables.sql...
+```
+
+3. Run constraints (from `database/02_constraints.sql`)
+4. Run indexes (from `database/03_indexes.sql`)
+5. Run initial data (from `database/04_initial_data.sql`)
+
+<Tip>
+You can also connect to Neon using `psql` or pgAdmin to run the scripts:
+
+```bash
+psql "postgresql://user:password@ep-xxx.neon.tech/paparcapp_db?sslmode=require" -f database/01_tables.sql
+```
+</Tip>
+
+## Step 2: Render Web Service Setup
+
+### Create Web Service
+
+1. Log in to [Render Dashboard](https://dashboard.render.com)
+2. Click **"New +"** → **"Web Service"**
+3. Connect your GitHub repository
+4. Configure the service:
+
+| Setting | Value |
+|---------|-------|
+| **Name** | `paparcapp` |
+| **Region** | Same as Neon (e.g., Oregon, Frankfurt) |
+| **Branch** | `main` or `production` |
+| **Runtime** | `Node` |
+| **Build Command** | `npm install` |
+| **Start Command** | `npm start` |
+| **Instance Type** | `Free` (or `Starter` for production) |
+
+### Environment Variables
+
+Add the following environment variables in Render dashboard:
+
+#### Required Variables
+
+```bash
+# Node Environment
+NODE_ENV=production
+PORT=3000
+
+# Database (Neon Connection)
+DATABASE_URL=postgresql://user:password@ep-xxx-xxx.neon.tech/paparcapp_db?sslmode=require
+
+# Session Secret (generate a strong random string)
+SESSION_SECRET=your-super-secret-random-string-here-use-password-generator
+
+# n8n Webhook
+N8N_WEBHOOK_URL=https://your-n8n-instance.app/webhook/reserva-confirmada
+```
+
+<Warning>
+**Never commit** `.env` files to Git. The `.env.example` file shows required variables without sensitive values.
+</Warning>
+
+#### Generating SESSION_SECRET
+
+Generate a strong secret using Node.js:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Or use an online generator like [passwordsgenerator.net](https://passwordsgenerator.net/).
+
+### Database Connection Configuration
+
+PaparcApp is already configured to use Neon's connection string:
+
+```javascript config/database.js
+const { Pool } = require('pg');
+require('dotenv').config();
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false  // Required for Neon
+    }
+});
+
+module.exports = {
+    query: (text, params) => pool.query(text, params),
+    pool: pool,
+    connect: () => pool.connect()
+};
+```
+
+The `ssl: { rejectUnauthorized: false }` setting is **required** for cloud PostgreSQL providers like Neon and Render.
+
+## Step 3: Application Configuration
+
+### Trust Proxy for HTTPS
+
+Render uses a reverse proxy with SSL termination. PaparcApp is pre-configured:
+
+```javascript app.js
+// Trust Render proxy for secure cookies
+app.set('trust proxy', 1);
+
+app.use(session({ 
+    secret: process.env.SESSION_SECRET || 'clave_secreta',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        maxAge: 1000*60*60, // 1 hour
+        secure: process.env.NODE_ENV === 'production' // Enables HTTPS-only cookies
+    } 
+}));
+```
+
+The `secure: true` flag ensures session cookies are only sent over HTTPS in production.
+
+### Static Files
+
+Render automatically serves files from the `public/` directory:
+
+```javascript app.js
+app.use(express.static(path.join(__dirname, 'public')));
+```
+
+No additional configuration needed.
+
+## Step 4: Firebase Configuration
+
+### Update Firebase Config
+
+If deploying to a custom domain, update the authorized domains in Firebase Console:
+
+1. Go to [Firebase Console](https://console.firebase.google.com)
+2. Select your project: `paparcapp-b0ac1`
+3. Navigate to **Authentication** → **Settings** → **Authorized domains**
+4. Add your Render domain:
+   - `your-app.onrender.com`
+   - Your custom domain (if using one)
+
+### Environment-Specific Config
+
+The Firebase config is in `public/javascripts/firebase-config.js`:
+
+```javascript
+const firebaseConfig = {
+  apiKey: "AIzaSyD61OFtuypBCC8OuFEHN54VtVprJA00zTI",
+  authDomain: "paparcapp-b0ac1.firebaseapp.com",
+  projectId: "paparcapp-b0ac1",
+  storageBucket: "paparcapp-b0ac1.firebasestorage.app",
+  messagingSenderId: "363572926161",
+  appId: "1:363572926161:web:20bfb546fa6a1e38c797f0"
+};
+```
+
+<Note>
+Firebase config is safe to expose in frontend code. The API key is **not** a secret - it's restricted by domain authorization.
+</Note>
+
+## Step 5: Deploy
+
+### Initial Deployment
+
+1. Push your code to GitHub
+2. Render automatically detects the push and starts building
+3. Monitor the deployment in Render dashboard:
+   - **Logs** tab shows build progress
+   - Look for "Build successful" and "Server started"
+
+### Deployment Process
+
+Render executes these steps:
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Start application
+npm start  # Runs: node ./bin/www
+```
+
+### Verify Deployment
+
+Check that services are running:
+
+1. **Web Service**: Visit `https://your-app.onrender.com`
+2. **Database**: Check Neon dashboard for active connections
+3. **Logs**: Review Render logs for errors:
+
+```bash
+# Expected successful startup logs:
+Nueva conexión establecida con la base de datos
+Cache de precios inicializada correctamente
+Server listening on port 3000
+```
+
+## Step 6: Post-Deployment
+
+### Create Admin User
+
+Connect to your Neon database and create an admin account:
+
+```sql
+-- Generate password hash for 'admin123' (change this!)
+-- Use bcrypt with 10 rounds: $2b$10$...
+
+INSERT INTO customer (full_name, email, password_hash, type) 
+VALUES (
+    'Admin User',
+    'admin@paparcapp.com',
+    '$2b$10$YourBcryptHashHere',  -- Replace with actual hash
+    'ADMIN'
+);
+```
+
+<Warning>
+Generate password hashes using the registration page or a bcrypt tool. Never use plain text passwords.
+</Warning>
+
+### Test Critical Features
+
+Verify these features work in production:
+
+- [ ] User registration and login
+- [ ] Google/Facebook social login
+- [ ] Create a reservation
+- [ ] Email notification received
+- [ ] Admin dashboard access
+- [ ] Session persistence
+- [ ] HTTPS redirects
+
+## Environment Variables Reference
+
+Complete `.env.example` for production:
+
+```bash .env.example
+# Server Configuration
+PORT=3000
+NODE_ENV=production
+
+# Session Security
+SESSION_SECRET=generate-strong-random-secret-minimum-32-characters
+
+# Database Connection (Neon PostgreSQL)
+DATABASE_URL=postgresql://user:password@host.neon.tech/paparcapp_db?sslmode=require
+
+# Alternative individual DB variables (not used with DATABASE_URL)
+# DB_USER=postgres
+# DB_PASSWORD=your-password
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_NAME=paparcapp_db
+
+# Notifications
+N8N_WEBHOOK_URL=https://your-n8n-instance.app/webhook/reserva-confirmada
+```
+
+### Required vs Optional
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|----------|
+| `NODE_ENV` | Yes | `development` | Enables production optimizations |
+| `PORT` | No | `3000` | Server port (Render sets automatically) |
+| `SESSION_SECRET` | **Yes** | ⚠️ Insecure fallback | Signs session cookies |
+| `DATABASE_URL` | **Yes** | None | PostgreSQL connection string |
+| `N8N_WEBHOOK_URL` | Yes | Localhost fallback | Email notification endpoint |
+
+## Custom Domain (Optional)
+
+### Add Custom Domain to Render
+
+1. In Render dashboard, go to **Settings** → **Custom Domain**
+2. Add your domain: `paparcapp.com`
+3. Configure DNS records at your domain registrar:
+
+```
+CNAME  www  your-app.onrender.com
+A      @    <Render IP from dashboard>
+```
+
+4. Render automatically provisions SSL certificate
+
+### Update Firebase Authorized Domains
+
+Add your custom domain to Firebase (see Step 4 above).
+
+## Monitoring and Logs
+
+### Render Logs
+
+Access real-time logs in Render dashboard:
+
+```bash
+# View logs
+Dashboard → Your Service → Logs
+
+# Common log messages:
+"Nueva conexión establecida con la base de datos"  # DB connected ✓
+"Cache de precios inicializada correctamente"      # Pricing cache loaded ✓
+"Error inesperado en el cliente de la base de datos" # DB error ✗
+```
+
+### Database Monitoring
+
+Neon provides built-in monitoring:
+
+- **Connections**: Track active database connections
+- **Queries**: Monitor slow queries
+- **Storage**: Check database size and limits
+
+Access via Neon Dashboard → Your Project → Monitoring.
+
+### Error Tracking
+
+For production error tracking, consider integrating:
+
+- **Sentry**: Application error monitoring
+- **LogDNA** or **Datadog**: Log aggregation
+- **Uptime Robot**: Availability monitoring
+
+## Troubleshooting
+
+### Common Issues
+
+#### Database Connection Failed
+
+**Error**: `Error inesperado en el cliente de la base de datos`
+
+**Solutions**:
+1. Verify `DATABASE_URL` is correct in Render environment variables
+2. Check Neon database is active (not suspended)
+3. Ensure `ssl: { rejectUnauthorized: false }` is set in `config/database.js`
+4. Test connection string locally:
+   ```bash
+   psql "$DATABASE_URL"
+   ```
+
+#### Session Not Persisting
+
+**Error**: Users logged out on every request
+
+**Solutions**:
+1. Check `SESSION_SECRET` is set in environment variables
+2. Verify `trust proxy` is set to `1` in `app.js`
+3. Ensure `NODE_ENV=production` for secure cookies
+4. Check browser isn't blocking cookies
+
+#### Firebase Auth Fails
+
+**Error**: `auth/unauthorized-domain`
+
+**Solutions**:
+1. Add Render domain to Firebase authorized domains
+2. Clear browser cache and retry
+3. Check Firebase console for service outages
+
+#### Email Notifications Not Sending
+
+**Error**: `Error al contactar con n8n`
+
+**Solutions**:
+1. Verify `N8N_WEBHOOK_URL` is correct
+2. Check n8n workflow is active
+3. Test webhook directly with curl:
+   ```bash
+   curl -X POST "$N8N_WEBHOOK_URL" \
+     -H "Content-Type: application/json" \
+     -d '{"test": true}'
+   ```
+4. Review n8n execution logs
+
+### Performance Optimization
+
+#### Enable Connection Pooling
+
+Already configured in `config/database.js`:
+
+```javascript
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: 20,        // Maximum pool size
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+});
+```
+
+#### Cache Pricing Data
+
+The app preloads pricing data on startup:
+
+```javascript app.js
+PricingService.initCache()
+  .then(() => {
+    console.log("Cache de precios inicializada correctamente");
+  })
+  .catch((err) => {
+    console.error("No se pudo cargar la cache de precio");
+    process.exit(1);
+  });
+```
+
+## Scaling Considerations
+
+### Render Free Tier Limits
+
+- Service spins down after 15 minutes of inactivity
+- First request after spin-down takes 30-60 seconds
+- 750 hours/month free (enough for 1 service)
+
+### Upgrading to Paid Plans
+
+**Render Starter ($7/month)**:
+- Always-on service (no spin-down)
+- Faster builds
+- Custom domains with auto-SSL
+
+**Neon Pro ($19/month)**:
+- Increased storage (10GB)
+- Longer data retention
+- Branch management
+
+## Backup Strategy
+
+### Database Backups (Neon)
+
+Neon automatically backs up your database:
+- **Retention**: 7 days (free tier) / 30 days (paid)
+- **Point-in-time recovery**: Available on Pro plan
+
+Manual backup:
+
+```bash
+pg_dump "$DATABASE_URL" > paparcapp_backup_$(date +%Y%m%d).sql
+```
+
+### Code Backups
+
+Git repository serves as code backup:
+- Push to GitHub regularly
+- Tag production releases: `git tag v1.0.0`
+- Consider GitHub automated backups or secondary remote
+
+## Security Checklist
+
+Before going live:
+
+- [ ] `SESSION_SECRET` is strong and unique
+- [ ] Database credentials are not in code
+- [ ] HTTPS is enforced (automatic on Render)
+- [ ] Firebase authorized domains configured
+- [ ] Admin default password changed
+- [ ] SQL injection protection (parameterized queries used)
+- [ ] CORS configured if using API
+- [ ] Rate limiting considered for auth endpoints
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="shield-halved" href="/guides/authentication">
+    Set up user authentication and session management
+  </Card>
+  <Card title="Notifications" icon="envelope" href="/guides/notifications">
+    Configure email notifications with n8n
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [Render Documentation](https://render.com/docs)
+- [Neon Documentation](https://neon.tech/docs)
+- [Express.js Production Best Practices](https://expressjs.com/en/advanced/best-practice-performance.html)
+- [PostgreSQL Performance Tuning](https://www.postgresql.org/docs/current/performance-tips.html)

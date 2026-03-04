@@ -1,97 +1,238 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: PaparcApp Documentation
+description: Complete airport parking management system with online reservations, dynamic pricing, and automated workflows
+mode: custom
 ---
 
-## Setting up
+<div className="relative bg-gradient-to-br from-[#94cb04] via-[#7ba703] to-[#629302] py-20 overflow-hidden">
+  <div className="absolute inset-0 bg-black/20"></div>
+  <div className="relative max-w-6xl mx-auto px-6 lg:px-8">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6">
+          Airport Parking Management Made Simple
+        </h1>
+        <p className="text-lg sm:text-xl text-white/90 max-w-2xl mb-8">
+          PaparcApp is a full-stack solution for managing airport parking operations — from online reservations and dynamic pricing to admin dashboards and automated notifications.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a
+            href="/quickstart"
+            className="inline-flex items-center px-6 py-3 rounded-lg bg-white text-gray-900 font-semibold hover:bg-gray-100 transition-colors shadow-lg"
+          >
+            Get Started
+          </a>
+          <a
+            href="/api/pricing"
+            className="inline-flex items-center px-6 py-3 rounded-lg border-2 border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors backdrop-blur-sm"
+          >
+            Explore API
+          </a>
+        </div>
+      </div>
+      <div className="lg:col-span-5 hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-white/10 rounded-2xl backdrop-blur-sm"></div>
+          <div className="relative p-8 text-white">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-white/20 flex items-center justify-center">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-semibold">Real-time Pricing</div>
+                  <div className="text-sm text-white/80">Dynamic rates by duration & vehicle</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-white/20 flex items-center justify-center">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm0 14a6 6 0 110-12 6 6 0 010 12z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-semibold">Complete Lifecycle</div>
+                  <div className="text-sm text-white/80">Pending → In Progress → Completed</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg bg-white/20 flex items-center justify-center">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 2C5.03 2 1 6.03 1 11s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9zm0 16c-3.86 0-7-3.14-7-7s3.14-7 7-7 7 3.14 7 7-3.14 7-7 7z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div className="font-semibold">Automated Workflows</div>
+                  <div className="text-sm text-white/80">Email notifications via n8n</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Quick Start</h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">Get PaparcApp running locally in minutes</p>
+  
+  <Steps>
+    <Step title="Clone the repository">
+      Clone the PaparcApp repository and navigate to the project directory:
+      
+      ```bash
+      git clone https://github.com/rafakata/PaparcApp.git
+      cd PaparcApp/proyecto
+      ```
+    </Step>
+    
+    <Step title="Install dependencies">
+      Install the required Node.js packages:
+      
+      ```bash npm
+      npm install
+      ```
+      
+      <Note>Requires Node.js 18+ and PostgreSQL 14+</Note>
+    </Step>
+    
+    <Step title="Configure environment">
+      Copy the example environment file and configure your database connection:
+      
+      ```bash
+      cp .env.example .env
+      ```
+      
+      Update the `.env` file with your PostgreSQL credentials and session secret.
+    </Step>
+    
+    <Step title="Set up the database">
+      Execute the SQL scripts in order to create tables, constraints, and seed data:
+      
+      ```bash
+      psql -d paparcapp_db -f database/01_tables.sql
+      psql -d paparcapp_db -f database/02_constraints.sql
+      psql -d paparcapp_db -f database/03_indexes.sql
+      psql -d paparcapp_db -f database/04_initial_data.sql
+      ```
+    </Step>
+    
+    <Step title="Start the application">
+      Launch the development server:
+      
+      ```bash
+      npm run dev
+      ```
+      
+      Access the application at `http://localhost:3000`
+    </Step>
+  </Steps>
+</div>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Explore by Feature</h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">Discover what PaparcApp can do for your parking operation</p>
+  
+  <CardGroup cols={2}>
+    <Card title="Public Booking System" icon="calendar-check" href="/features/public-booking">
+      Multi-step reservation flow with real-time price calculation and vehicle registration
+    </Card>
+    <Card title="Admin Dashboard" icon="gauge-high" href="/features/admin-dashboard">
+      Calendar-based reservation management with entry/exit tracking and filtering
+    </Card>
+    <Card title="User Profiles" icon="user" href="/features/user-profile">
+      Virtual garage management, reservation history, and account settings
+    </Card>
+    <Card title="Reservation Lifecycle" icon="arrows-rotate" href="/features/reservation-lifecycle">
+      Complete state transitions with photo evidence and payment tracking
+    </Card>
+  </CardGroup>
+</div>
 
-## Make it yours
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Architecture & Guides</h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">Understand how PaparcApp works under the hood</p>
+  
+  <CardGroup cols={3}>
+    <Card title="System Overview" icon="sitemap" href="/architecture/overview">
+      MVC architecture with Express.js and PostgreSQL
+    </Card>
+    <Card title="Database Schema" icon="database" href="/architecture/database-schema">
+      13 tables with constraints and relationships
+    </Card>
+    <Card title="Pricing Engine" icon="calculator" href="/architecture/pricing-engine">
+      Dynamic pricing with vehicle coefficients
+    </Card>
+    <Card title="Authentication" icon="shield-halved" href="/guides/authentication">
+      Classic login and Firebase social auth
+    </Card>
+    <Card title="Notifications" icon="envelope" href="/guides/notifications">
+      Automated emails via n8n webhooks
+    </Card>
+    <Card title="Deployment" icon="rocket" href="/guides/deployment">
+      Deploy to Render with Neon PostgreSQL
+    </Card>
+  </CardGroup>
+</div>
 
-Design a docs site that looks great and empowers your users.
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">API Reference</h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">Integrate with PaparcApp's REST API</p>
+  
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <a href="/api/pricing" className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#94cb04] dark:hover:border-[#94cb04] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]">
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Dynamic Pricing API</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Calculate reservation costs based on dates, vehicle type, and services</p>
+        <div className="flex items-center text-sm font-medium text-[#94cb04]">
+          <span>View endpoint</span>
+          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </a>
+    
+    <a href="/api/reservations" className="group block rounded-2xl border border-gray-200 dark:border-[#27272a] hover:border-[#94cb04] dark:hover:border-[#94cb04] overflow-hidden transition-colors no-underline bg-white dark:bg-[#1a1d27]">
+      <div className="p-6">
+        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Public Reservations API</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Create new reservations with customer and vehicle data</p>
+        <div className="flex items-center text-sm font-medium text-[#94cb04]">
+          <span>View endpoint</span>
+          <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
-
-## Create beautiful pages
-
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<div className="mt-20 mb-16 max-w-5xl mx-auto px-6">
+  <div className="rounded-2xl bg-gradient-to-r from-[#94cb04] to-[#7ba703] p-8 md:p-12 text-center">
+    <h2 className="text-3xl font-bold text-white mb-4">Ready to get started?</h2>
+    <p className="text-lg text-white/90 mb-8 max-w-2xl mx-auto">
+      Set up PaparcApp locally or explore the live demo to see all features in action
+    </p>
+    <div className="flex flex-col sm:flex-row gap-4 justify-center">
+      <a
+        href="/quickstart"
+        className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-white text-gray-900 font-semibold hover:bg-gray-100 transition-colors shadow-lg"
+      >
+        Start Building
+      </a>
+      <a
+        href="https://paparcapp-azby.onrender.com"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center justify-center px-6 py-3 rounded-lg border-2 border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors backdrop-blur-sm"
+      >
+        View Live Demo
+      </a>
+    </div>
+  </div>
+</div>

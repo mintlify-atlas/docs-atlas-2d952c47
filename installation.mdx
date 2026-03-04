@@ -1,0 +1,941 @@
+---
+title: Installation Guide
+description: Comprehensive setup instructions for PaparcApp including prerequisites, environment configuration, database setup, and deployment
+---
+
+# Installation Guide
+
+This guide provides detailed instructions for installing and configuring PaparcApp in both development and production environments.
+
+## Prerequisites
+
+Before installing PaparcApp, ensure your system meets these requirements:
+
+### Required Software
+
+<CardGroup cols={3}>
+  <Card title="Node.js" icon="node-js">
+    **Version**: 18.x or higher
+    
+    [Download Node.js](https://nodejs.org/)
+  </Card>
+  <Card title="npm" icon="npm">
+    **Version**: 9.x or higher
+    
+    Included with Node.js
+  </Card>
+  <Card title="PostgreSQL" icon="database">
+    **Version**: 14 or higher
+    
+    [Download PostgreSQL](https://postgresql.org/)
+  </Card>
+</CardGroup>
+
+### System Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **RAM** | 2 GB | 4 GB |
+| **Storage** | 500 MB | 1 GB |
+| **CPU** | 1 core | 2 cores |
+| **OS** | Linux, macOS, Windows | Linux (Ubuntu 20.04+) |
+
+### Verify Prerequisites
+
+Check that all required software is installed:
+
+<CodeGroup>
+```bash Node.js Version
+node --version
+# Expected: v18.0.0 or higher
+```
+
+```bash npm Version
+npm --version
+# Expected: 9.0.0 or higher
+```
+
+```bash PostgreSQL Version
+psql --version
+# Expected: psql (PostgreSQL) 14.0 or higher
+```
+</CodeGroup>
+
+<Warning>
+  If any version is below the minimum requirement, please upgrade before proceeding.
+</Warning>
+
+## Installation Steps
+
+### 1. Clone the Repository
+
+Clone the PaparcApp repository from GitHub:
+
+```bash
+git clone https://github.com/tu-usuario/PaparcApp.git
+cd PaparcApp
+```
+
+The project structure:
+
+```
+PaparcApp/
+├── proyecto/                    # Main application directory
+│   ├── app.js                   # Express configuration
+│   ├── package.json             # Dependencies and scripts
+│   ├── .env.example             # Environment template
+│   ├── bin/www                  # HTTP server entry point
+│   ├── config/
+│   │   └── database.js          # PostgreSQL connection pool
+│   ├── controllers/             # Business logic
+│   ├── database/                # SQL schema files
+│   ├── middlewares/             # Authentication guards
+│   ├── models/                  # Data access objects (DAOs)
+│   ├── routes/                  # Express routers
+│   ├── services/                # Pricing engine, notifications
+│   ├── public/                  # Static assets
+│   ├── views/                   # EJS templates
+│   └── tests/                   # Jest test suites
+└── README.md
+```
+
+### 2. Install Dependencies
+
+Navigate to the `proyecto` directory and install npm packages:
+
+```bash
+cd proyecto
+npm install
+```
+
+This installs all production and development dependencies:
+
+<Accordion title="View complete dependency list">
+  **Production Dependencies:**
+  - `express@4.21.2` - Web framework
+  - `pg@8.17.2` - PostgreSQL client
+  - `bcrypt@6.0.0` - Password hashing
+  - `ejs@3.1.10` - Template engine
+  - `express-session@1.18.2` - Session management
+  - `dotenv@17.2.3` - Environment variable loader
+  - `axios@1.13.4` - HTTP client
+  - `firebase@12.9.0` - Social authentication
+  - `cookie-parser@1.4.4` - Cookie parsing
+  - `morgan@1.10.1` - HTTP request logger
+  - `http-errors@1.6.3` - Error handling
+  - `debug@2.6.9` - Debugging utility
+
+  **Development Dependencies:**
+  - `nodemon@3.1.11` - Auto-restart on file changes
+  - `jest@30.2.0` - Testing framework
+</Accordion>
+
+### 3. Configure Environment Variables
+
+#### Create .env File
+
+Copy the example template and customize it:
+
+```bash
+cp .env.example .env
+```
+
+#### Environment Configuration Options
+
+<Tabs>
+  <Tab title="Local Development">
+    ```bash .env
+    # Server Configuration
+    PORT=3000
+    NODE_ENV=development
+
+    # Session Secret (generate a secure random string)
+    SESSION_SECRET=your_32_character_random_string_here
+
+    # PostgreSQL Local Connection
+    DB_USER=postgres
+    DB_PASSWORD=your_postgres_password
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=paparcapp_db
+    ```
+
+    <Note>
+      For local development, use the individual `DB_*` variables. The connection pool in `config/database.js` will use these.
+    </Note>
+  </Tab>
+
+  <Tab title="Production (Neon.tech)">
+    ```bash .env
+    # Server Configuration
+    PORT=3000
+    NODE_ENV=production
+
+    # Session Secret (use a strong random string)
+    SESSION_SECRET=prod_32_character_random_string_here
+
+    # PostgreSQL Connection (Neon.tech)
+    DATABASE_URL=postgresql://user:password@host.neon.tech/database?sslmode=require
+    ```
+
+    <Warning>
+      In production, the app uses `DATABASE_URL` with SSL enabled. The connection string includes all connection details.
+    </Warning>
+  </Tab>
+
+  <Tab title="All Variables">
+    Complete list of all environment variables:
+
+    ```bash .env
+    # Server
+    PORT=3000                    # HTTP port (default: 3000)
+    NODE_ENV=development         # Environment: development | production
+
+    # Session
+    SESSION_SECRET=secret_key    # Secure random string (min 32 chars)
+
+    # Database (Local)
+    DB_USER=postgres             # PostgreSQL username
+    DB_PASSWORD=password         # PostgreSQL password
+    DB_HOST=localhost            # Database host
+    DB_PORT=5432                 # PostgreSQL port
+    DB_NAME=paparcapp_db         # Database name
+
+    # Database (Production - Neon.tech)
+    DATABASE_URL=postgresql://...  # Full connection string with SSL
+
+    # Optional: Email Notifications (n8n webhook)
+    N8N_WEBHOOK_URL=https://...    # n8n webhook endpoint
+    ```
+  </Tab>
+</Tabs>
+
+#### Generate Secure SESSION_SECRET
+
+<CodeGroup>
+```bash Using Node.js crypto
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+```bash Using OpenSSL
+openssl rand -hex 32
+```
+
+```bash Using pwgen
+pwgen -s 64 1
+```
+</CodeGroup>
+
+<Warning>
+  **Security Best Practices:**
+  - Never commit `.env` to version control
+  - Use different secrets for development and production
+  - Rotate secrets periodically
+  - Use at least 32 characters for SESSION_SECRET
+</Warning>
+
+### 4. Database Setup
+
+#### Option A: Local PostgreSQL
+
+<Steps>
+  <Step title="Create Database">
+    Connect to PostgreSQL and create the database:
+
+    ```bash
+    # Connect as postgres superuser
+    sudo -u postgres psql
+    ```
+
+    ```sql
+    -- Create database
+    CREATE DATABASE paparcapp_db;
+
+    -- Create dedicated user (optional but recommended)
+    CREATE USER paparcapp_user WITH PASSWORD 'secure_password';
+
+    -- Grant privileges
+    GRANT ALL PRIVILEGES ON DATABASE paparcapp_db TO paparcapp_user;
+
+    -- Exit
+    \q
+    ```
+  </Step>
+
+  <Step title="Load Database Schema">
+    Execute the SQL files in the correct order:
+
+    ```bash
+    # From the proyecto directory
+    psql -U postgres -d paparcapp_db -f database/01_tables.sql
+    psql -U postgres -d paparcapp_db -f database/02_constraints.sql
+    psql -U postgres -d paparcapp_db -f database/03_indexes.sql
+    psql -U postgres -d paparcapp_db -f database/04_initial_data.sql
+    ```
+
+    Or combine into a single command:
+
+    ```bash
+    cat database/*.sql | psql -U postgres -d paparcapp_db
+    ```
+  </Step>
+
+  <Step title="Verify Setup">
+    Check that all tables were created:
+
+    ```bash
+    psql -U postgres -d paparcapp_db -c "\dt"
+    ```
+
+    Expected output (13 tables):
+    ```
+    Schema |              Name                | Type  |  Owner
+    --------+----------------------------------+-------+----------
+    public | additional_service               | table | postgres
+    public | contract                         | table | postgres
+    public | contract_plan                    | table | postgres
+    public | customer                         | table | postgres
+    public | customer_vehicle                 | table | postgres
+    public | main_service                     | table | postgres
+    public | notification                     | table | postgres
+    public | photo_evidence                   | table | postgres
+    public | reservation                      | table | postgres
+    public | reservation_additional_service   | table | postgres
+    public | service_rate                     | table | postgres
+    public | vehicle                          | table | postgres
+    public | vehicle_coefficient              | table | postgres
+    ```
+  </Step>
+</Steps>
+
+#### Option B: Neon.tech (Cloud PostgreSQL)
+
+<Steps>
+  <Step title="Create Neon Account">
+    1. Go to [neon.tech](https://neon.tech)
+    2. Sign up for a free account
+    3. Create a new project
+  </Step>
+
+  <Step title="Get Connection String">
+    Copy the connection string from the Neon dashboard:
+
+    ```
+    postgresql://username:password@ep-xxx-xxx.region.aws.neon.tech/dbname?sslmode=require
+    ```
+
+    Add this to your `.env` file as `DATABASE_URL`.
+  </Step>
+
+  <Step title="Load Schema via psql">
+    ```bash
+    # Set connection string
+    export DATABASE_URL="postgresql://..."
+
+    # Load schema
+    psql $DATABASE_URL -f database/01_tables.sql
+    psql $DATABASE_URL -f database/02_constraints.sql
+    psql $DATABASE_URL -f database/03_indexes.sql
+    psql $DATABASE_URL -f database/04_initial_data.sql
+    ```
+  </Step>
+</Steps>
+
+### Database Schema Files
+
+Understanding what each SQL file does:
+
+<AccordionGroup>
+  <Accordion title="01_tables.sql - Table Creation" icon="table">
+    Creates all 13 tables with primary keys:
+
+    - `customer` - System users (ADMIN, REGISTRADO, NO-REGISTRADO)
+    - `vehicle` - Vehicle registry with unique license plates
+    - `customer_vehicle` - N:M relationship (virtual garage)
+    - `vehicle_coefficient` - Pricing multipliers by vehicle type
+    - `main_service` - Three service tiers (ECO, TRANSFER, MEET)
+    - `service_rate` - Pricing by day ranges for each service
+    - `additional_service` - Extra services catalog (washes, ITV, etc.)
+    - `reservation` - Booking records with lifecycle states
+    - `reservation_additional_service` - N:M for extras per booking
+    - `photo_evidence` - Vehicle condition photos
+    - `notification` - Email log
+    - `contract_plan` - Subscription plans
+    - `contract` - Active subscriptions
+
+    ```sql Example: vehicle table
+    CREATE TABLE vehicle (
+        id_vehicle         SERIAL PRIMARY KEY,
+        license_plate      VARCHAR(15) NOT NULL UNIQUE,
+        brand              VARCHAR(50) NOT NULL,
+        model              VARCHAR(50) NOT NULL,
+        color              VARCHAR(30) NOT NULL,
+        type               VARCHAR(30) NOT NULL,
+        registration_date  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    ```
+  </Accordion>
+
+  <Accordion title="02_constraints.sql - Business Rules" icon="shield-check">
+    Adds foreign keys and CHECK constraints to enforce business logic:
+
+    - Reservation status: only PENDIENTE, EN CURSO, FINALIZADA, CANCELADA
+    - Payment method: only TARJETA, EFECTIVO, or NULL
+    - Parking spot required for IN PROGRESS and COMPLETED states
+    - Exit date must be after entry date
+    - Price must be non-negative
+    - Email and phone validation patterns
+    - Vehicle multiplier must be positive
+
+    ```sql Example: reservation constraints
+    ALTER TABLE reservation ADD CONSTRAINT check_status 
+      CHECK (status IN ('PENDIENTE', 'EN CURSO', 'FINALIZADA', 'CANCELADA'));
+
+    ALTER TABLE reservation ADD CONSTRAINT check_exit_after_entry 
+      CHECK (exit_date > entry_date);
+
+    ALTER TABLE reservation ADD CONSTRAINT check_price_non_negative 
+      CHECK (total_price >= 0);
+    ```
+  </Accordion>
+
+  <Accordion title="03_indexes.sql - Performance Optimization" icon="gauge-high">
+    Creates 9 additional indexes for frequently queried columns:
+
+    - `idx_reservation_id_vehicle` - Fast vehicle lookup
+    - `idx_reservation_entry_date` - Filter by check-in date
+    - `idx_reservation_exit_date` - Filter by check-out date
+    - `idx_reservation_id_customer` - Customer's reservations
+    - `idx_reservation_status` - Filter by state
+    - `idx_photo_evidence_id_reservation` - Reservation photos
+    - `idx_notification_id_reservation` - Notification history
+    - And more...
+
+    ```sql Example indexes
+    CREATE INDEX idx_reservation_status ON reservation(status);
+    CREATE INDEX idx_reservation_entry_date ON reservation(entry_date);
+    CREATE INDEX idx_reservation_exit_date ON reservation(exit_date);
+    ```
+  </Accordion>
+
+  <Accordion title="04_initial_data.sql - Seed Data" icon="seedling">
+    Loads essential configuration and test data:
+
+    **Master Configuration:**
+    - 5 vehicle coefficients (TURISMO ×1.0, MOTOCICLETA ×0.5, etc.)
+    - 3 main services (ECO, TRANSFER, MEET) with descriptions
+    - 12 service rate tiers (4 day ranges × 3 services)
+    - 3 subscription plans (Quarterly, Semiannual, Annual)
+    - Additional services catalog (washes, ITV, charging, etc.)
+
+    **Test Data:**
+    - Sample customers (including admin users)
+    - Test vehicles
+    - Sample reservations in different states
+    - Photo evidence examples
+    - Notification logs
+
+    ```sql Example: pricing configuration
+    INSERT INTO vehicle_coefficient (vehicle_type, multiplier) VALUES 
+    ('TURISMO', 1.00),
+    ('MOTOCICLETA', 0.50),
+    ('FURGONETA', 1.25),
+    ('CARAVANA', 2.00),
+    ('ESPECIAL', 1.50);
+
+    INSERT INTO service_rate (id_main_service, min_days, max_days, daily_price) VALUES
+    (1, 1, 3, 12.00),   -- ECO: 1-3 days = €12/day
+    (1, 4, 10, 8.00),   -- ECO: 4-10 days = €8/day
+    (1, 11, 15, 6.00),  -- ECO: 11-15 days = €6/day
+    (1, 16, 9999, 5.00); -- ECO: 16+ days = €5/day
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### 5. Start the Application
+
+<Tabs>
+  <Tab title="Development Mode">
+    Start with Nodemon for auto-restart on file changes:
+
+    ```bash
+    npm run dev
+    ```
+
+    Expected output:
+    ```
+    [nodemon] 3.1.11
+    [nodemon] to restart at any time, enter `rs`
+    [nodemon] watching path(s): *.*
+    [nodemon] watching extensions: js,ejs
+    [nodemon] starting `node ./bin/www`
+    ✓ Database connection pool initialized
+    ✓ Pricing cache initialized successfully
+    Server listening on http://localhost:3000
+    ```
+
+    <Note>
+      Nodemon watches for file changes and automatically restarts the server. Perfect for development.
+    </Note>
+  </Tab>
+
+  <Tab title="Production Mode">
+    Start with standard Node.js (no auto-restart):
+
+    ```bash
+    npm start
+    ```
+
+    For production deployment with process management:
+
+    ```bash
+    # Using PM2
+    npm install -g pm2
+    pm2 start bin/www --name paparcapp
+    pm2 save
+    pm2 startup
+    ```
+
+    <Warning>
+      In production:
+      - Set `NODE_ENV=production` in `.env`
+      - Use HTTPS (cookies have `secure` flag)
+      - Enable trust proxy in Express (already configured)
+      - Use a process manager like PM2
+    </Warning>
+  </Tab>
+
+  <Tab title="Testing">
+    Run the Jest test suite:
+
+    ```bash
+    npm test
+    ```
+
+    Expected output:
+    ```
+    PASS  tests/pricingService.test.js
+      Pricing Service
+        ✓ calculates price for same-day booking (1 day minimum) (5ms)
+        ✓ applies correct tier for multi-day stay (3ms)
+        ✓ multiplies by vehicle coefficient (caravana ×2) (2ms)
+        ✓ adds additional services to total (3ms)
+        ✓ throws error for invalid vehicle type (2ms)
+        ✓ respects 2-hour courtesy period (no extra day) (3ms)
+        ✓ charges extra day after courtesy period (2ms)
+
+    Test Suites: 1 passed, 1 total
+    Tests:       7 passed, 7 total
+    Time:        1.234s
+    ```
+  </Tab>
+</Tabs>
+
+## Post-Installation
+
+### Create Admin User
+
+If the initial data script didn't create an admin user, create one manually:
+
+```sql
+-- Generate password hash first
+-- In Node.js console: require('bcrypt').hash('your_password', 10, console.log)
+
+INSERT INTO customer (
+  full_name, 
+  email, 
+  phone, 
+  password_hash, 
+  type, 
+  is_active
+) VALUES (
+  'Admin User',
+  'admin@paparcapp.com',
+  '+34600000001',
+  '$2b$10$YourBcryptHashHere',  -- Replace with actual hash
+  'ADMIN',
+  true
+);
+```
+
+<Accordion title="Generate bcrypt hash for password">
+  ```javascript
+  // Create a script: hash-password.js
+  const bcrypt = require('bcrypt');
+  
+  const password = process.argv[2] || 'admin123';
+  bcrypt.hash(password, 10, (err, hash) => {
+    if (err) throw err;
+    console.log('Password:', password);
+    console.log('Hash:', hash);
+  });
+
+  // Run it:
+  // node hash-password.js your_password
+  ```
+</Accordion>
+
+### Configure Firebase (Optional)
+
+For social login (Google/Facebook), set up Firebase:
+
+<Steps>
+  <Step title="Create Firebase Project">
+    1. Go to [Firebase Console](https://console.firebase.google.com)
+    2. Create a new project
+    3. Enable Authentication
+  </Step>
+  <Step title="Enable Providers">
+    In Authentication > Sign-in method:
+    - Enable Google
+    - Enable Facebook (requires Facebook App ID)
+  </Step>
+  <Step title="Get Config">
+    From Project Settings > General, copy the Firebase config:
+
+    ```javascript
+    const firebaseConfig = {
+      apiKey: "AIza...",
+      authDomain: "paparcapp.firebaseapp.com",
+      projectId: "paparcapp",
+      storageBucket: "paparcapp.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:abc123"
+    };
+    ```
+  </Step>
+  <Step title="Update Client Config">
+    Add the config to `public/javascripts/firebase-config.js`
+  </Step>
+</Steps>
+
+### Configure Email Notifications (Optional)
+
+For automated emails via n8n:
+
+<Steps>
+  <Step title="Set Up n8n">
+    Deploy n8n or use [n8n.cloud](https://n8n.cloud)
+  </Step>
+  <Step title="Create Workflow">
+    Import the notification workflow (check `services/templates/` for email templates)
+  </Step>
+  <Step title="Get Webhook URL">
+    Copy the webhook URL from n8n
+  </Step>
+  <Step title="Update .env">
+    ```bash
+    N8N_WEBHOOK_URL=https://your-n8n-instance.com/webhook/...
+    ```
+  </Step>
+</Steps>
+
+## Deployment Options
+
+### Deploy to Render
+
+<Steps>
+  <Step title="Create Render Account">
+    Sign up at [render.com](https://render.com)
+  </Step>
+  <Step title="Create Web Service">
+    - Connect your GitHub repository
+    - Select the `proyecto` directory
+    - Set build command: `npm install`
+    - Set start command: `npm start`
+  </Step>
+  <Step title="Configure Environment">
+    Add environment variables in Render dashboard:
+    - `NODE_ENV=production`
+    - `DATABASE_URL` (from Neon.tech)
+    - `SESSION_SECRET`
+    - `PORT=3000`
+  </Step>
+  <Step title="Deploy">
+    Render will automatically build and deploy
+  </Step>
+</Steps>
+
+### Deploy to Heroku
+
+```bash
+# Install Heroku CLI
+curl https://cli-assets.heroku.com/install.sh | sh
+
+# Login
+heroku login
+
+# Create app
+cd proyecto
+heroku create paparcapp
+
+# Add PostgreSQL
+heroku addons:create heroku-postgresql:mini
+
+# Set environment variables
+heroku config:set NODE_ENV=production
+heroku config:set SESSION_SECRET=your_secret
+
+# Deploy
+git push heroku main
+
+# Open app
+heroku open
+```
+
+### Deploy with Docker
+
+<Accordion title="Dockerfile example">
+  ```dockerfile Dockerfile
+  FROM node:18-alpine
+
+  WORKDIR /app
+
+  # Copy package files
+  COPY package*.json ./
+
+  # Install dependencies
+  RUN npm ci --only=production
+
+  # Copy application
+  COPY . .
+
+  # Expose port
+  EXPOSE 3000
+
+  # Start server
+  CMD ["npm", "start"]
+  ```
+
+  ```yaml docker-compose.yml
+  version: '3.8'
+
+  services:
+    app:
+      build: .
+      ports:
+        - "3000:3000"
+      environment:
+        - NODE_ENV=production
+        - DATABASE_URL=postgresql://postgres:password@db:5432/paparcapp
+        - SESSION_SECRET=your_secret
+      depends_on:
+        - db
+
+    db:
+      image: postgres:16-alpine
+      environment:
+        - POSTGRES_DB=paparcapp
+        - POSTGRES_USER=postgres
+        - POSTGRES_PASSWORD=password
+      volumes:
+        - pgdata:/var/lib/postgresql/data
+        - ./database:/docker-entrypoint-initdb.d
+
+  volumes:
+    pgdata:
+  ```
+
+  ```bash
+  # Build and run
+  docker-compose up -d
+  ```
+</Accordion>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cannot connect to database" icon="database">
+    **Symptoms:**
+    ```
+    Error: connect ECONNREFUSED 127.0.0.1:5432
+    ```
+
+    **Solutions:**
+    1. Check PostgreSQL is running:
+       ```bash
+       # Linux
+       sudo systemctl status postgresql
+       
+       # macOS
+       brew services list
+       
+       # Windows
+       sc query postgresql
+       ```
+
+    2. Verify connection settings in `.env`
+    3. Test direct connection:
+       ```bash
+       psql -U postgres -d paparcapp_db -c "SELECT 1;"
+       ```
+
+    4. Check PostgreSQL logs:
+       ```bash
+       # Linux
+       sudo tail -f /var/log/postgresql/postgresql-*.log
+       
+       # macOS
+       tail -f /usr/local/var/log/postgres.log
+       ```
+  </Accordion>
+
+  <Accordion title="Pricing cache initialization failed" icon="coins">
+    **Symptoms:**
+    ```
+    Error initializing pricing cache
+    Process exited with code 1
+    ```
+
+    **Solutions:**
+    1. Ensure initial data was loaded:
+       ```bash
+       psql -U postgres -d paparcapp_db -c "SELECT COUNT(*) FROM vehicle_coefficient;"
+       # Should return 5
+       ```
+
+    2. Check service rates exist:
+       ```bash
+       psql -U postgres -d paparcapp_db -c "SELECT COUNT(*) FROM service_rate;"
+       # Should return 12
+       ```
+
+    3. Re-run initial data script:
+       ```bash
+       psql -U postgres -d paparcapp_db -f database/04_initial_data.sql
+       ```
+
+    4. Check database connection works before starting app
+  </Accordion>
+
+  <Accordion title="Session not working / Can't login" icon="key">
+    **Symptoms:**
+    - Login succeeds but immediately logs out
+    - Session data not persisting
+    - "Unauthorized" errors
+
+    **Solutions:**
+    1. Check `SESSION_SECRET` is set in `.env`
+    2. Clear browser cookies and cache
+    3. Verify express-session is installed:
+       ```bash
+       npm ls express-session
+       ```
+    4. In production, ensure HTTPS is enabled (session cookies require secure flag)
+    5. Check trust proxy setting in `app.js` (required for Render/Heroku)
+  </Accordion>
+
+  <Accordion title="Port already in use" icon="plug">
+    **Symptoms:**
+    ```
+    Error: listen EADDRINUSE: address already in use :::3000
+    ```
+
+    **Solutions:**
+    1. Change port in `.env`:
+       ```bash
+       PORT=3001
+       ```
+
+    2. Kill the process using port 3000:
+       ```bash
+       # Linux/macOS
+       lsof -ti:3000 | xargs kill -9
+       
+       # Windows
+       netstat -ano | findstr :3000
+       taskkill /PID <PID> /F
+       ```
+
+    3. Or run with custom port temporarily:
+       ```bash
+       PORT=3001 npm run dev
+       ```
+  </Accordion>
+
+  <Accordion title="bcrypt compilation errors" icon="lock">
+    **Symptoms:**
+    ```
+    Error: node-pre-gyp install --fallback-to-build
+    ```
+
+    **Solutions:**
+    1. Install build tools:
+       ```bash
+       # Linux
+       sudo apt-get install build-essential
+       
+       # macOS
+       xcode-select --install
+       
+       # Windows
+       npm install --global windows-build-tools
+       ```
+
+    2. Rebuild bcrypt:
+       ```bash
+       npm rebuild bcrypt
+       ```
+
+    3. Or use pre-built binaries:
+       ```bash
+       npm uninstall bcrypt
+       npm install bcrypt --build-from-source
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Checklist
+
+Before deploying to production:
+
+<Steps>
+  <Step title="Environment Security">
+    - [ ] Set `NODE_ENV=production`
+    - [ ] Use strong `SESSION_SECRET` (min 32 chars)
+    - [ ] Never commit `.env` to version control
+    - [ ] Add `.env` to `.gitignore`
+  </Step>
+  <Step title="Database Security">
+    - [ ] Use SSL for database connections
+    - [ ] Create dedicated database user (not postgres superuser)
+    - [ ] Grant only necessary privileges
+    - [ ] Regular backups configured
+  </Step>
+  <Step title="Application Security">
+    - [ ] HTTPS enabled (trust proxy configured)
+    - [ ] Session cookies set to secure
+    - [ ] All passwords use bcrypt (10+ rounds)
+    - [ ] SQL queries use parameterization
+    - [ ] Input validation on all forms
+  </Step>
+  <Step title="Monitoring">
+    - [ ] Error logging configured
+    - [ ] Database connection pool monitoring
+    - [ ] Set up health check endpoint
+    - [ ] Configure uptime monitoring
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Guide" icon="sitemap" href="/architecture/overview">
+    Learn about the MVC pattern, service layers, and data flow
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/pricing">
+    Explore REST endpoints for pricing and reservations
+  </Card>
+  <Card title="Database Schema" icon="database" href="/architecture/database-schema">
+    Detailed documentation of all 13 tables and relationships
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started quickly with PaparcApp
+  </Card>
+</CardGroup>
+
+---
+
+<Info>
+  **Need Help?** Join the discussion on [GitHub Issues](https://github.com/tu-usuario/PaparcApp/issues) or check the [Quick Start Guide](/quickstart) for a faster setup.
+</Info>

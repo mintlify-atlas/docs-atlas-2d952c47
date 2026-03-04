@@ -1,0 +1,158 @@
+---
+title: 'Calculate Dynamic Price'
+api: 'POST /api/pricing/dynamic'
+---
+
+## Overview
+
+Calculates the dynamic price for a parking reservation based on entry/exit dates, vehicle type, main service, and optional additional services.
+
+This endpoint is **public** and does not require authentication.
+
+## Authentication
+
+No authentication required.
+
+## Request Body
+
+<ParamField body="entry_date" type="string" required>
+  Entry date in ISO 8601 format (e.g., `2026-03-10T10:00:00.000Z`)
+</ParamField>
+
+<ParamField body="exit_date" type="string" required>
+  Exit date in ISO 8601 format (e.g., `2026-03-15T10:00:00.000Z`)
+</ParamField>
+
+<ParamField body="vehicle_type" type="string" required>
+  Type of vehicle. Valid values depend on your pricing configuration.
+  
+  Common examples:
+  - `COCHE`
+  - `MOTO`
+  - `FURGONETA`
+  - `SUV`
+</ParamField>
+
+<ParamField body="id_main_service" type="integer" required>
+  ID of the main parking service selected by the customer.
+</ParamField>
+
+<ParamField body="additional_services" type="array" default="[]">
+  Array of additional service IDs (integers) to include in the price calculation.
+  
+  Example: `[1, 3, 5]`
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean">
+  Indicates whether the price calculation was successful.
+</ResponseField>
+
+<ResponseField name="total_price" type="number">
+  The calculated total price rounded to 2 decimal places.
+  
+  Price calculation includes:
+  - Base daily rate based on service and duration
+  - Vehicle type multiplier
+  - Additional services cost
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Error message (only present when `success: false`)
+</ResponseField>
+
+## Pricing Logic
+
+The pricing calculation follows these rules:
+
+1. **Duration Calculation**: Days are calculated from entry to exit date
+   - A 2-hour courtesy period is applied
+   - Minimum charge is 1 day
+
+2. **Base Rate**: Selected based on the main service and total days
+
+3. **Vehicle Multiplier**: Applied based on vehicle type
+
+4. **Additional Services**: Fixed prices added to the total
+
+5. **Final Price**: `(daily_rate × days × vehicle_multiplier) + extras`
+
+## Error Codes
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Success - Price calculated |
+| 400 | Bad Request - Missing required fields (entry_date or exit_date) |
+| 500 | Internal Server Error - Calculation failed (e.g., invalid service ID, missing vehicle coefficient) |
+
+## Examples
+
+### Basic Request
+
+```bash
+curl -X POST https://api.paparcapp.com/api/pricing/dynamic \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entry_date": "2026-03-10T10:00:00.000Z",
+    "exit_date": "2026-03-15T10:00:00.000Z",
+    "vehicle_type": "COCHE",
+    "id_main_service": 1
+  }'
+```
+
+### Request with Additional Services
+
+```bash
+curl -X POST https://api.paparcapp.com/api/pricing/dynamic \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entry_date": "2026-03-10T10:00:00.000Z",
+    "exit_date": "2026-03-15T10:00:00.000Z",
+    "vehicle_type": "COCHE",
+    "id_main_service": 1,
+    "additional_services": [2, 4]
+  }'
+```
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "total_price": 125.50
+}
+```
+
+### Error Response - Missing Required Fields
+
+```json
+{
+  "success": false,
+  "message": "Las fechas de entrada y salida son requeridas para calcular el precio."
+}
+```
+
+### Error Response - Invalid Service
+
+```json
+{
+  "success": false,
+  "message": "No se encontró una tarifa base para el servicio 99 y 5 días"
+}
+```
+
+### Error Response - Invalid Vehicle Type
+
+```json
+{
+  "success": false,
+  "message": "No se encontró un coeficiente para el tipo de vehículo INVALID_TYPE"
+}
+```
+
+## Notes
+
+- The pricing cache must be initialized on server startup. If not initialized, the endpoint will return a 500 error.
+- Invalid additional service IDs are logged as warnings but do not cause the request to fail - they are simply omitted from the calculation.
+- All prices are calculated server-side to ensure consistency and prevent client-side manipulation.
