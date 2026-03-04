@@ -1,0 +1,91 @@
+{
+  "projectType": "saas",
+  "projectName": "PaparcApp",
+  "projectDescription": "Full-stack airport parking management system with online reservations, admin dashboard, dynamic pricing, and email notifications",
+  "theme": "almond",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/public-booking",
+              "features/user-profile",
+              "features/admin-dashboard",
+              "features/reservation-lifecycle"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/database-schema",
+              "architecture/pricing-engine"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/authentication",
+              "guides/notifications",
+              "guides/deployment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Public Endpoints",
+            "pages": [
+              "api/pricing",
+              "api/reservations"
+            ]
+          },
+          {
+            "group": "Admin Endpoints",
+            "pages": [
+              "api/admin-reservations"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-step online booking with real-time price calculation",
+    "Admin dashboard with calendar and reservation management",
+    "Dynamic pricing engine with vehicle coefficients and service rates",
+    "Dual authentication (classic login + Firebase social auth)",
+    "Complete reservation lifecycle (PENDING → IN PROGRESS → COMPLETED)",
+    "Photo evidence system for vehicle condition",
+    "Automated email notifications via n8n webhooks",
+    "User profile with virtual garage and reservation history",
+    "Subscription plans (quarterly, semi-annual, annual)",
+    "Additional services catalog (car wash, EV charging, refueling, ITV)"
+  ],
+  "publicApiSurface": [
+    "POST /api/pricing/dynamic",
+    "POST /api/reservations/public-new",
+    "GET /api/reservations (admin)",
+    "PricingService.calculateTotalPrice()",
+    "customerDAO.create()",
+    "reservationDAO.create()",
+    "vehicleDAO.create()",
+    "notificationService.send()"
+  ]
+}
